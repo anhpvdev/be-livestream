@@ -1,0 +1,70 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  PrimaryColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+
+export enum EncoderDesiredState {
+  RUNNING = 'running',
+  STOPPED = 'stopped',
+}
+
+@Entity('encoder_jobs')
+export class EncoderJob {
+  @PrimaryColumn({ type: 'uuid', name: 'livestream_id' })
+  livestreamId: string;
+
+  @Index('idx_encoder_jobs_desired_state')
+  @Column({ type: 'varchar', length: 16, name: 'desired_state' })
+  desiredState: EncoderDesiredState;
+
+  @Column({ type: 'text', name: 'media_path', nullable: true })
+  mediaPath: string | null;
+
+  @Column({ type: 'text', name: 'rtmp_url', nullable: true })
+  rtmpUrl: string | null;
+
+  @Column({ type: 'text', name: 'backup_rtmp_url', nullable: true })
+  backupRtmpUrl: string | null;
+
+  @Column({ type: 'text', name: 'stream_key', nullable: true })
+  streamKey: string | null;
+
+  @Column({ type: 'varchar', length: 20, name: 'seek_to', nullable: true })
+  seekTo: string | null;
+
+  @Column({ type: 'uuid', name: 'profile_id', nullable: true })
+  profileId: string | null;
+
+  @Column({ type: 'int', name: 'current_video_index', default: 0 })
+  currentVideoIndex: number;
+
+  @Column({ type: 'uuid', name: 'current_media_id', nullable: true })
+  currentMediaId: string | null;
+
+  @Column({ type: 'varchar', length: 16, name: 'active_node', nullable: true })
+  activeNode: string | null;
+
+  @Column({ type: 'bigint', name: 'current_timestamp_ms', nullable: true })
+  currentTimestampMs: number | null;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    name: 'current_timestamp_str',
+    nullable: true,
+  })
+  currentTimestampStr: string | null;
+
+  @Column({ type: 'timestamptz', name: 'last_heartbeat_at', nullable: true })
+  lastHeartbeatAt: Date | null;
+
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt: Date;
+}
