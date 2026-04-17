@@ -69,11 +69,28 @@ export class LivestreamService {
     const { profile, media } = await this.resolveStartContext(dto);
     const youtubeSession = await this.resolveYoutubeSession(dto);
 
-    if (profile.thumbnailUrl) {
-      await this.youtubeOrchestrator.setBroadcastThumbnailFromUrl(
+    if (profile.thumbnailMediaId) {
+      const thumbnailMedia = await this.mediaService.findById(
+        profile.thumbnailMediaId,
+      );
+      if (thumbnailMedia.status !== MediaFileStatus.READY) {
+        throw new BadRequestException(
+          `Thumbnail media ${thumbnailMedia.id} is not ready`,
+        );
+      }
+      if (thumbnailMedia.kind !== MediaFileKind.IMAGE) {
+        throw new BadRequestException(
+          `Thumbnail media ${thumbnailMedia.id} must be image`,
+        );
+      }
+      const thumbnailBuffer = await this.mediaService.getMediaBuffer(
+        thumbnailMedia.id,
+      );
+      await this.youtubeOrchestrator.setBroadcastThumbnail(
         dto.googleAccountId,
         youtubeSession.broadcastId,
-        profile.thumbnailUrl,
+        thumbnailBuffer,
+        thumbnailMedia.mimeType,
       );
     }
 
@@ -348,16 +365,6 @@ export class LivestreamService {
 
   async removeLivestream(id: string): Promise<void> {
     const livestream = await this.findById(id);
-
-    // if (
-    //   livestream.status === LivestreamStatus.LIVE ||
-    //   livestream.status === LivestreamStatus.TESTING
-    // ) {
-    //   throw new BadRequestException(
-    //     'Livestream is active. Please stop it before delete.',
-    //   );
-    // }
-
     await this.livestreamRepo.remove(livestream);
   }
 
@@ -434,9 +441,7 @@ export class LivestreamService {
   }
 
   private async resolveStartContext(dto: StartLivestreamDto) {
-    const account = await this.googleAccountService.findById(
-      dto.googleAccountId,
-    );
+    await this.googleAccountService.findById(dto.googleAccountId);
     const profile = await this.livestreamProfileService.findById(dto.profileId);
     if (!profile.videoMediaIds || profile.videoMediaIds.length === 0) {
       throw new BadRequestException('Profile must contain at least one video');
@@ -447,13 +452,8 @@ export class LivestreamService {
         `Profile video ${profile.videoMediaIds[0]} is not ready`,
       );
     }
-    if (media.kind !== MediaFileKind.VIDEO) {
-      throw new BadRequestException(
-        `Profile video ${profile.videoMediaIds[0]} must be video`,
-      );
-    }
 
-    return { account, profile, media };
+    return { profile, media };
   }
 
   private async resolveYoutubeSession(dto: StartLivestreamDto) {
@@ -463,31 +463,6 @@ export class LivestreamService {
       throw new BadRequestException(
         'Profile chưa có livestreamTitle, vui lòng cập nhật profile trước khi start',
       );
-    }
-
-    if (profile.youtubeBroadcastId) {
-      if (!profile.youtubeStreamId || !profile.youtubeStreamKey) {
-        throw new BadRequestException(
-          'youtubeStreamId và youtubeStreamKey là bắt buộc khi profile dùng youtubeBroadcastId',
-        );
-      }
-
-      const existing = await this.youtubeOrchestrator.bindExistingBroadcast(
-        dto.googleAccountId,
-        profile.youtubeBroadcastId,
-        profile.youtubeStreamId,
-      );
-
-      return {
-        broadcastId: existing.broadcastId,
-        stream: {
-          streamId: profile.youtubeStreamId,
-          streamKey: profile.youtubeStreamKey,
-          rtmpUrl: profile.youtubeRtmpUrl || existing.stream.rtmpUrl,
-          backupRtmpUrl:
-            profile.youtubeBackupRtmpUrl ?? existing.stream.backupRtmpUrl,
-        },
-      };
     }
 
     return this.youtubeOrchestrator.createAndBindBroadcast(dto.googleAccountId, {

@@ -3,18 +3,12 @@ import { GoogleAccountService } from '../google-account/google-account.service';
 import {
   CreateBroadcastParams,
   CreateStreamResult,
-  StreamIngestionInfo,
   YouTubeApiService,
 } from './youtube-api.service';
 
 type CreateAndBindResult = {
   broadcastId: string;
   stream: CreateStreamResult;
-};
-
-type BindExistingResult = {
-  broadcastId: string;
-  stream: StreamIngestionInfo;
 };
 
 @Injectable()
@@ -32,48 +26,29 @@ export class YouTubeLivestreamOrchestratorService {
     googleAccountId: string,
     params: CreateBroadcastParams,
   ): Promise<CreateAndBindResult> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    const broadcast = await this.youtubeApiService.createBroadcast(
-      auth,
-      params,
-    );
-    const stream = await this.youtubeApiService.createStream(auth);
-    await this.youtubeApiService.bindBroadcastToStream(
-      auth,
-      broadcast.broadcastId,
-      stream.streamId,
-    );
+    return this.withAuthRetry(googleAccountId, async (auth) => {
+      const broadcast = await this.youtubeApiService.createBroadcast(auth, params);
+      const stream = await this.youtubeApiService.createStream(auth);
+      await this.youtubeApiService.bindBroadcastToStream(
+        auth,
+        broadcast.broadcastId,
+        stream.streamId,
+      );
 
-    return {
-      broadcastId: broadcast.broadcastId,
-      stream,
-    };
-  }
-
-  async bindExistingBroadcast(
-    googleAccountId: string,
-    broadcastId: string,
-    streamId: string,
-  ): Promise<BindExistingResult> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    await this.youtubeApiService.bindBroadcastToStream(auth, broadcastId, streamId);
-    const stream = await this.youtubeApiService.getStreamIngestionInfo(
-      auth,
-      streamId,
-    );
-
-    return {
-      broadcastId,
-      stream,
-    };
+      return {
+        broadcastId: broadcast.broadcastId,
+        stream,
+      };
+    });
   }
 
   async getBroadcastLifecycleStatus(
     googleAccountId: string,
     broadcastId: string,
   ): Promise<string> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    return this.youtubeApiService.getBroadcastStatus(auth, broadcastId);
+    return this.withAuthRetry(googleAccountId, async (auth) =>
+      this.youtubeApiService.getBroadcastStatus(auth, broadcastId),
+    );
   }
 
   async transitionBroadcast(
@@ -81,33 +56,30 @@ export class YouTubeLivestreamOrchestratorService {
     broadcastId: string,
     status: 'testing' | 'live' | 'complete',
   ): Promise<void> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    await this.youtubeApiService.transitionBroadcast(auth, broadcastId, status);
+    await this.withAuthRetry(googleAccountId, async (auth) => {
+      await this.youtubeApiService.transitionBroadcast(auth, broadcastId, status);
+    });
   }
 
-  async setBroadcastThumbnailFromUrl(
+  async setBroadcastThumbnail(
     googleAccountId: string,
     broadcastId: string,
-    thumbnailUrl: string,
+    imageBuffer: Buffer,
+    mimeType: string,
   ): Promise<void> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    const response = await fetch(thumbnailUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch thumbnail from URL: ${thumbnailUrl}`);
+    const supportedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    if (!supportedMimeTypes.includes(mimeType)) {
+      throw new Error(`Unsupported thumbnail mime type: ${mimeType}`);
     }
-
-    const contentType = response.headers.get('content-type') || '';
-    const isPng = contentType.includes('image/png');
-    const isJpeg =
-      contentType.includes('image/jpeg') || contentType.includes('image/jpg');
-    if (!isPng && !isJpeg) {
-      throw new Error(
-        `Unsupported thumbnail mime type: ${contentType || 'unknown'}`,
+    const youtubeMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    await this.withAuthRetry(googleAccountId, async (auth) => {
+      await this.youtubeApiService.setThumbnail(
+        auth,
+        broadcastId,
+        imageBuffer,
+        youtubeMimeType,
       );
-    }
-    const mimeType = isPng ? 'image/png' : 'image/jpeg';
-    const buffer = Buffer.from(await response.arrayBuffer());
-    await this.youtubeApiService.setThumbnail(auth, broadcastId, buffer, mimeType);
+    });
   }
 
   async waitForStreamReady(
@@ -115,21 +87,54 @@ export class YouTubeLivestreamOrchestratorService {
     streamId: string,
     maxAttempts = 30,
   ): Promise<void> {
-    const auth = await this.getAuthenticatedClient(googleAccountId);
-    for (let i = 0; i < maxAttempts; i++) {
-      const status = await this.youtubeApiService.getStreamStatus(
-        auth,
-        streamId,
-      );
-      if (status === 'active') return;
-      await this.delay(2000);
-    }
-    this.logger.warn(`Stream ${streamId} did not become active within timeout`);
+    await this.withAuthRetry(googleAccountId, async (auth) => {
+      for (let i = 0; i < maxAttempts; i++) {
+        const status = await this.youtubeApiService.getStreamStatus(auth, streamId);
+        if (status === 'active') return;
+        await this.delay(2000);
+      }
+      throw new Error(`Stream ${streamId} did not become active within timeout`);
+    });
   }
 
-  private async getAuthenticatedClient(googleAccountId: string) {
+  private async getAuthenticatedClient(
+    googleAccountId: string,
+    forceRefresh = false,
+  ) {
     const account = await this.googleAccountService.findById(googleAccountId);
-    return this.googleAccountService.getAuthenticatedClient(account);
+    return await this.googleAccountService.getAuthenticatedClient(
+      account,
+      forceRefresh,
+    );
+  }
+
+  private async withAuthRetry<T>(
+    googleAccountId: string,
+    execute: (auth: Awaited<ReturnType<typeof this.getAuthenticatedClient>>) => Promise<T>,
+  ): Promise<T> {
+    try {
+      const auth = await this.getAuthenticatedClient(googleAccountId);
+      return await execute(auth);
+    } catch (error) {
+      if (!this.isInvalidTokenError(error)) {
+        throw error;
+      }
+
+      this.logger.warn(
+        `YouTube API invalid token for ${googleAccountId}, forcing token refresh and retrying once`,
+      );
+      const refreshedAuth = await this.getAuthenticatedClient(googleAccountId, true);
+      return await execute(refreshedAuth);
+    }
+  }
+
+  private isInvalidTokenError(error: unknown): boolean {
+    const maybeError = error as { status?: number; code?: number; response?: { status?: number } };
+    return (
+      maybeError?.status === 401 ||
+      maybeError?.code === 401 ||
+      maybeError?.response?.status === 401
+    );
   }
 
   private delay(ms: number): Promise<void> {

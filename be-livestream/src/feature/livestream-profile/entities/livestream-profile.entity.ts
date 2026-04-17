@@ -29,8 +29,8 @@ export class LivestreamProfile {
   @Column({ type: 'text', nullable: true })
   livestreamDescription: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  thumbnailUrl: string | null;
+  @Column({ type: 'uuid', nullable: true })
+  thumbnailMediaId: string | null;
 
   @Column({
     type: 'enum',
@@ -38,21 +38,6 @@ export class LivestreamProfile {
     default: PrivacyStatus.UNLISTED,
   })
   privacyStatus: PrivacyStatus;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  youtubeBroadcastId: string | null;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  youtubeStreamId: string | null;
-
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  youtubeStreamKey: string | null;
-
-  @Column({ type: 'varchar', length: 500, nullable: true })
-  youtubeRtmpUrl: string | null;
-
-  @Column({ type: 'varchar', length: 500, nullable: true })
-  youtubeBackupRtmpUrl: string | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

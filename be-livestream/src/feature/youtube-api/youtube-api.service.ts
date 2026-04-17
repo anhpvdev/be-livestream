@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { google, youtube_v3 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { Readable } from 'stream';
@@ -17,17 +17,13 @@ export interface CreateStreamResult {
   backupRtmpUrl: string | null;
 }
 
-export interface StreamIngestionInfo {
-  streamId: string;
-  streamKey: string;
-  rtmpUrl: string;
-  backupRtmpUrl: string | null;
-}
-
 export interface BroadcastResult {
   broadcastId: string;
   lifeCycleStatus: string;
 }
+
+const YOUTUBE_RTMP_PRIMARY_URL = 'rtmp://a.rtmp.youtube.com/live2';
+const YOUTUBE_RTMP_BACKUP_URL = 'rtmp://b.rtmp.youtube.com/live2?backup=1';
 
 @Injectable()
 export class YouTubeApiService {
@@ -93,31 +89,8 @@ export class YouTubeApiService {
     return {
       streamId: data.id,
       streamKey: ingestionInfo?.streamName || '',
-      rtmpUrl: ingestionInfo?.ingestionAddress || '',
-      backupRtmpUrl: ingestionInfo?.backupIngestionAddress || null,
-    };
-  }
-
-  async getStreamIngestionInfo(
-    auth: OAuth2Client,
-    streamId: string,
-  ): Promise<StreamIngestionInfo> {
-    const youtube = this.getClient(auth);
-    const { data } = await youtube.liveStreams.list({
-      id: [streamId],
-      part: ['cdn'],
-    });
-
-    const stream = data.items?.[0];
-    if (!stream) {
-      throw new NotFoundException(`YouTube stream ${streamId} not found`);
-    }
-    const ingestionInfo = stream?.cdn?.ingestionInfo;
-    return {
-      streamId,
-      streamKey: ingestionInfo?.streamName || '',
-      rtmpUrl: ingestionInfo?.ingestionAddress || '',
-      backupRtmpUrl: ingestionInfo?.backupIngestionAddress || null,
+      rtmpUrl: YOUTUBE_RTMP_PRIMARY_URL,
+      backupRtmpUrl: YOUTUBE_RTMP_BACKUP_URL,
     };
   }
 
@@ -176,21 +149,6 @@ export class YouTubeApiService {
     });
 
     return data.items?.[0]?.status?.lifeCycleStatus || 'unknown';
-  }
-
-  async deleteBroadcast(
-    auth: OAuth2Client,
-    broadcastId: string,
-  ): Promise<void> {
-    const youtube = this.getClient(auth);
-    await youtube.liveBroadcasts.delete({ id: broadcastId });
-    this.logger.log(`Broadcast ${broadcastId} deleted`);
-  }
-
-  async deleteStream(auth: OAuth2Client, streamId: string): Promise<void> {
-    const youtube = this.getClient(auth);
-    await youtube.liveStreams.delete({ id: streamId });
-    this.logger.log(`Stream ${streamId} deleted`);
   }
 
   async setThumbnail(

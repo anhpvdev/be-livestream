@@ -17,6 +17,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private readonly prefetchEnabled: boolean;
   private readonly prefetchLogSkips: boolean;
   private readonly cacheDir: string;
+  private readonly playlistControllerNode: string;
   private pg: Client;
 
   private pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -44,6 +45,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     this.prefetchLogSkips =
       this.config.get<string>('ENGINE_PREFETCH_LOG_SKIPS', 'false') === 'true';
     this.cacheDir = this.config.get<string>('ENGINE_CACHE_DIR', '/tmp/encoder-cache');
+    this.playlistControllerNode = this.config.get<string>(
+      'ENGINE_PLAYLIST_CONTROLLER_NODE',
+      'primary',
+    );
 
     this.pg = this.createPgClient();
   }
@@ -134,6 +139,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
     const job = rows[0];
     const dualIngest = !!job.backup_rtmp_url;
+    const isPlaylistController =
+      !dualIngest || this.nodeName === this.playlistControllerNode;
     const targetRtmpBase =
       this.nodeName === 'backup' ? job.backup_rtmp_url || job.rtmp_url : job.rtmp_url;
     if (!targetRtmpBase || !job.stream_key) return;
@@ -172,6 +179,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       nextIndex = Math.max(0, nextIndex % profileMediaIds.length);
 
       if (
+        isPlaylistController &&
         this.currentLivestreamId === job.livestream_id &&
         this.currentStatus === 'completed' &&
         !this.currentProcess
@@ -194,10 +202,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
       if (!targetMediaId || !profileMediaIds.includes(targetMediaId)) {
         targetMediaId = profileMediaIds[nextIndex];
-        await this.pg.query(
-          'UPDATE encoder_jobs SET current_video_index = $1, current_media_id = $2 WHERE livestream_id = $3',
-          [nextIndex, targetMediaId, job.livestream_id],
-        );
+        if (isPlaylistController) {
+          await this.pg.query(
+            'UPDATE encoder_jobs SET current_video_index = $1, current_media_id = $2 WHERE livestream_id = $3',
+            [nextIndex, targetMediaId, job.livestream_id],
+          );
+        }
       }
       targetMediaIndex = profileMediaIds.indexOf(targetMediaId);
       if (this.prefetchEnabled && profileMediaIds.length > 0) {
@@ -225,17 +235,23 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       this.currentOutputRtmpUrl !== targetRtmpBase;
 
     if (shouldRestart && targetMediaPath) {
+      const effectiveSeekTo =
+        this.currentLivestreamId === job.livestream_id &&
+        this.currentStatus === 'completed' &&
+        !this.currentProcess
+          ? '00:00:00.000'
+          : job.seek_to || '00:00:00.000';
       this.startFfmpeg({
         mediaPath: targetMediaPath,
         mediaId: targetMediaId,
         streamKey: job.stream_key,
         rtmpUrl: targetRtmpBase,
-        seekTo: job.seek_to || '00:00:00.000',
+        seekTo: effectiveSeekTo,
         livestreamId: job.livestream_id,
       });
     }
 
-    await this.updateHeartbeat();
+    await this.updateHeartbeat(isPlaylistController);
   }
 
   private startFfmpeg(params: {
@@ -316,7 +332,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async updateHeartbeat(): Promise<void> {
+  private async updateHeartbeat(shouldUpdateMediaCursor: boolean): Promise<void> {
     if (!this.currentLivestreamId) return;
     await this.pg.query(
       `UPDATE encoder_jobs
@@ -324,7 +340,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
            last_heartbeat_at = NOW(),
            current_timestamp_ms = $2,
            current_timestamp_str = $3,
-           current_media_id = $4
+           current_media_id = CASE WHEN $6 THEN $4 ELSE current_media_id END
        WHERE livestream_id = $5`,
       [
         this.nodeName,
@@ -332,6 +348,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         this.currentTimestampStr,
         this.currentMediaId,
         this.currentLivestreamId,
+        shouldUpdateMediaCursor,
       ],
     );
   }

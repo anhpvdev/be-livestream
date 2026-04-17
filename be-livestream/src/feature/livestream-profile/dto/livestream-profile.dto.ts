@@ -5,9 +5,7 @@ import {
   IsArray,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
-  ValidateIf,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -51,12 +49,11 @@ export class CreateLivestreamProfileDto {
   livestreamDescription?: string;
 
   @ApiPropertyOptional({
-    description: 'Thumbnail URL để set cho broadcast khi start',
-    example: 'https://cdn.example.com/live-thumb.jpg',
+    description: 'Media ID ảnh thumbnail để set cho broadcast khi start',
   })
   @IsOptional()
-  @IsUrl({ require_tld: true })
-  thumbnailUrl?: string;
+  @IsUUID()
+  thumbnailMediaId?: string;
 
   @ApiPropertyOptional({
     enum: PrivacyStatus,
@@ -65,44 +62,6 @@ export class CreateLivestreamProfileDto {
   @IsOptional()
   @IsEnum(PrivacyStatus)
   privacyStatus?: PrivacyStatus;
-
-  @ApiPropertyOptional({
-    description:
-      'YouTube broadcast ID có sẵn. Nếu có thì start sẽ bind vào stream có sẵn thay vì auto create.',
-    example: 'a1B2c3D4e5F',
-  })
-  @IsOptional()
-  @IsString()
-  youtubeBroadcastId?: string;
-
-  @ApiPropertyOptional({
-    description: 'YouTube stream ID có sẵn, bắt buộc khi có youtubeBroadcastId',
-  })
-  @ValidateIf((dto: CreateLivestreamProfileDto) => !!dto.youtubeBroadcastId)
-  @IsString()
-  youtubeStreamId?: string;
-
-  @ApiPropertyOptional({
-    description:
-      'YouTube stream key có sẵn, bắt buộc khi có youtubeBroadcastId',
-  })
-  @ValidateIf((dto: CreateLivestreamProfileDto) => !!dto.youtubeBroadcastId)
-  @IsString()
-  youtubeStreamKey?: string;
-
-  @ApiPropertyOptional({
-    description: 'RTMP ingest URL, optional nếu đã có streamId',
-  })
-  @IsOptional()
-  @IsString()
-  youtubeRtmpUrl?: string;
-
-  @ApiPropertyOptional({
-    description: 'Backup RTMP ingest URL',
-  })
-  @IsOptional()
-  @IsString()
-  youtubeBackupRtmpUrl?: string;
 }
 
 export class AddProfileVideoDto {
@@ -150,39 +109,14 @@ export class UpdateLivestreamProfileDto {
   livestreamDescription?: string;
 
   @ApiPropertyOptional({
-    description: 'Thumbnail URL để set cho broadcast khi start',
+    description: 'Media ID ảnh thumbnail để set cho broadcast khi start',
   })
   @IsOptional()
-  @IsUrl({ require_tld: true })
-  thumbnailUrl?: string;
+  @IsUUID()
+  thumbnailMediaId?: string;
 
   @ApiPropertyOptional({ enum: PrivacyStatus })
   @IsOptional()
   @IsEnum(PrivacyStatus)
   privacyStatus?: PrivacyStatus;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  youtubeBroadcastId?: string;
-
-  @ApiPropertyOptional()
-  @ValidateIf((dto: UpdateLivestreamProfileDto) => !!dto.youtubeBroadcastId)
-  @IsString()
-  youtubeStreamId?: string;
-
-  @ApiPropertyOptional()
-  @ValidateIf((dto: UpdateLivestreamProfileDto) => !!dto.youtubeBroadcastId)
-  @IsString()
-  youtubeStreamKey?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  youtubeRtmpUrl?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  youtubeBackupRtmpUrl?: string;
 }

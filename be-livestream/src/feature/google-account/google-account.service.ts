@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -43,9 +44,9 @@ export class GoogleAccountService {
       displayName: dto.channelName ?? null,
       clientId: dto.clientId,
       clientSecret: dto.clientSecret,
-      accessToken: dto.refreshToken,
+      accessToken: '',
       refreshToken: dto.refreshToken,
-      tokenExpiresAt: new Date(Date.now() + 3600 * 1000),
+      tokenExpiresAt: new Date(0),
       channelId: dto.channelId ?? null,
       status: GoogleAccountStatus.ACTIVE,
     });
@@ -141,16 +142,9 @@ export class GoogleAccountService {
     error?: string;
   }> {
     const account = await this.findById(id);
-    const auth = this.getAuthenticatedClient(account);
-    const youtube = google.youtube({ version: 'v3', auth });
 
     try {
-      const { data } = await youtube.channels.list({
-        mine: true,
-        part: ['id', 'snippet'],
-      });
-
-      const channel = data.items?.[0];
+      const channel = await this.fetchOwnChannel(account, false);
       if (!channel?.id) {
         return {
           ok: false,
@@ -194,6 +188,26 @@ export class GoogleAccountService {
     }
   }
 
+  private async fetchOwnChannel(account: GoogleAccount, forceRefresh: boolean) {
+    try {
+      const auth = await this.getAuthenticatedClient(account, forceRefresh);
+      const youtube = google.youtube({ version: 'v3', auth });
+      const { data } = await youtube.channels.list({
+        mine: true,
+        part: ['id', 'snippet'],
+      });
+      return data.items?.[0] ?? null;
+    } catch (error) {
+      if (!forceRefresh && this.isInvalidTokenError(error)) {
+        this.logger.warn(
+          `Verify got invalid token for ${account.accountLabel}, force refresh and retry`,
+        );
+        return this.fetchOwnChannel(account, true);
+      }
+      throw error;
+    }
+  }
+
   getDecryptedTokens(account: GoogleAccount): {
     accessToken: string;
     refreshToken: string | null;
@@ -204,16 +218,86 @@ export class GoogleAccountService {
     };
   }
 
-  getAuthenticatedClient(account: GoogleAccount) {
-    const { accessToken, refreshToken } = this.getDecryptedTokens(account);
-    const clientSecret = account.clientSecret ?? undefined;
+  async getAuthenticatedClient(
+    account: GoogleAccount,
+    forceRefresh = false,
+  ) {
+    const upToDateAccount = await this.ensureValidAccessToken(
+      account,
+      forceRefresh,
+    );
+    const { accessToken, refreshToken } = this.getDecryptedTokens(upToDateAccount);
+    const clientSecret = upToDateAccount.clientSecret ?? undefined;
 
-    const client = new google.auth.OAuth2(account.clientId, clientSecret);
+    const client = new google.auth.OAuth2(upToDateAccount.clientId, clientSecret);
     client.setCredentials({
       access_token: accessToken,
       refresh_token: refreshToken ?? undefined,
+      expiry_date: upToDateAccount.tokenExpiresAt.getTime(),
     });
     return client;
+  }
+
+  private async ensureValidAccessToken(
+    account: GoogleAccount,
+    forceRefresh = false,
+  ): Promise<GoogleAccount> {
+    const shouldRefresh =
+      forceRefresh ||
+      !account.accessToken ||
+      !account.tokenExpiresAt ||
+      account.tokenExpiresAt.getTime() <= Date.now() + 60 * 1000;
+    if (!shouldRefresh) return account;
+
+    if (!account.refreshToken) {
+      throw new UnauthorizedException(
+        `Google account ${account.accountLabel} has no refresh token`,
+      );
+    }
+
+    const clientSecret = account.clientSecret ?? undefined;
+    if (!clientSecret) {
+      throw new UnauthorizedException(
+        `Google account ${account.accountLabel} is missing client secret`,
+      );
+    }
+
+    const client = new google.auth.OAuth2(account.clientId, clientSecret);
+    client.setCredentials({
+      refresh_token: account.refreshToken,
+    });
+
+    const { credentials } = await client.refreshAccessToken();
+    if (!credentials.access_token) {
+      throw new UnauthorizedException(
+        `Unable to refresh access token for ${account.accountLabel}`,
+      );
+    }
+
+    account.accessToken = credentials.access_token;
+    account.tokenExpiresAt = new Date(
+      credentials.expiry_date || Date.now() + 3600 * 1000,
+    );
+    if (credentials.refresh_token) {
+      // Persist rotated refresh token immediately for next refresh cycles.
+      account.refreshToken = credentials.refresh_token;
+    }
+    account.status = GoogleAccountStatus.ACTIVE;
+    await this.googleAccountRepo.save(account);
+    return account;
+  }
+
+  private isInvalidTokenError(error: unknown): boolean {
+    const maybeError = error as {
+      status?: number;
+      code?: number;
+      response?: { status?: number };
+    };
+    return (
+      maybeError?.status === 401 ||
+      maybeError?.code === 401 ||
+      maybeError?.response?.status === 401
+    );
   }
 
   @Cron(CronExpression.EVERY_10_MINUTES)

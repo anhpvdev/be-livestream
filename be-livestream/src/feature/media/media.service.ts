@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { MediaFile, MediaFileStatus } from './entities/media.entity';
 import {
   Livestream,
@@ -158,6 +158,12 @@ export class MediaService {
         `Media ${id} không tương thích stream copy: audio codec phải là aac/mp3 (hiện tại: ${probe.audioCodec ?? 'none'})`,
       );
     }
+  }
+
+  async getMediaBuffer(id: string): Promise<Buffer> {
+    const media = await this.findById(id);
+    const fullPath = join(process.cwd(), 'media', media.storageKey);
+    return readFile(fullPath);
   }
 
   private async extractMetadata(

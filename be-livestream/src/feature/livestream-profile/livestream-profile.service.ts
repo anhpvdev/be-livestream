@@ -37,6 +37,9 @@ export class LivestreamProfileService {
     for (const id of dto.videoMediaIds) {
       await this.validateVideoId(id);
     }
+    if (dto.thumbnailMediaId) {
+      await this.validateThumbnailMediaId(dto.thumbnailMediaId);
+    }
 
     const profile = this.profileRepo.create({
       name: dto.name.trim(),
@@ -44,13 +47,8 @@ export class LivestreamProfileService {
       videoMediaIds: dto.videoMediaIds,
       livestreamTitle: dto.livestreamTitle?.trim() ?? null,
       livestreamDescription: dto.livestreamDescription ?? null,
-      thumbnailUrl: dto.thumbnailUrl ?? null,
+      thumbnailMediaId: dto.thumbnailMediaId ?? null,
       privacyStatus: dto.privacyStatus ?? PrivacyStatus.UNLISTED,
-      youtubeBroadcastId: dto.youtubeBroadcastId ?? null,
-      youtubeStreamId: dto.youtubeStreamId ?? null,
-      youtubeStreamKey: dto.youtubeStreamKey ?? null,
-      youtubeRtmpUrl: dto.youtubeRtmpUrl ?? null,
-      youtubeBackupRtmpUrl: dto.youtubeBackupRtmpUrl ?? null,
     });
     return this.profileRepo.save(profile);
   }
@@ -73,26 +71,14 @@ export class LivestreamProfileService {
     if (dto.livestreamDescription !== undefined) {
       profile.livestreamDescription = dto.livestreamDescription;
     }
-    if (dto.thumbnailUrl !== undefined) {
-      profile.thumbnailUrl = dto.thumbnailUrl;
+    if (dto.thumbnailMediaId !== undefined) {
+      if (dto.thumbnailMediaId) {
+        await this.validateThumbnailMediaId(dto.thumbnailMediaId);
+      }
+      profile.thumbnailMediaId = dto.thumbnailMediaId;
     }
     if (dto.privacyStatus !== undefined) {
       profile.privacyStatus = dto.privacyStatus;
-    }
-    if (dto.youtubeBroadcastId !== undefined) {
-      profile.youtubeBroadcastId = dto.youtubeBroadcastId;
-    }
-    if (dto.youtubeStreamId !== undefined) {
-      profile.youtubeStreamId = dto.youtubeStreamId;
-    }
-    if (dto.youtubeStreamKey !== undefined) {
-      profile.youtubeStreamKey = dto.youtubeStreamKey;
-    }
-    if (dto.youtubeRtmpUrl !== undefined) {
-      profile.youtubeRtmpUrl = dto.youtubeRtmpUrl;
-    }
-    if (dto.youtubeBackupRtmpUrl !== undefined) {
-      profile.youtubeBackupRtmpUrl = dto.youtubeBackupRtmpUrl;
     }
 
     return this.profileRepo.save(profile);
@@ -173,9 +159,19 @@ export class LivestreamProfileService {
     if (media.status !== MediaFileStatus.READY) {
       throw new BadRequestException(`Media ${videoId} is not ready`);
     }
-    if (media.kind !== MediaFileKind.VIDEO) {
-      throw new BadRequestException(`Media ${videoId} must be video`);
-    }
+    // if (media.kind !== MediaFileKind.VIDEO) {
+    //   throw new BadRequestException(`Media ${videoId} must be video`);
+    // }
     await this.mediaService.assertRtmpCopyCompatible(videoId);
+  }
+
+  private async validateThumbnailMediaId(mediaId: string): Promise<void> {
+    const media = await this.mediaService.findById(mediaId);
+    if (media.status !== MediaFileStatus.READY) {
+      throw new BadRequestException(`Thumbnail media ${mediaId} is not ready`);
+    }
+    if (media.kind !== MediaFileKind.IMAGE) {
+      throw new BadRequestException(`Thumbnail media ${mediaId} must be image`);
+    }
   }
 }

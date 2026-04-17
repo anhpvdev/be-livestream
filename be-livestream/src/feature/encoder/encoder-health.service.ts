@@ -72,6 +72,16 @@ export class EncoderHealthService implements OnModuleDestroy {
     }
   }
 
+  resetGrace(livestreamId: string, node?: EncoderNode): void {
+    const monitor = this.monitoredStreams.get(livestreamId);
+    if (!monitor) return;
+    if (node) {
+      monitor.currentNode = node;
+    }
+    monitor.missCount = 0;
+    monitor.graceUntilMs = Date.now() + this.startupGraceMs;
+  }
+
   onModuleDestroy(): void {
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
