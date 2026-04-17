@@ -1,6 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { PrivacyStatus } from '../entities/livestream.entity';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsUUID } from 'class-validator';
 
 export class StartLivestreamDto {
   @ApiProperty({
@@ -16,28 +15,4 @@ export class StartLivestreamDto {
   })
   @IsUUID()
   profileId: string;
-
-  @ApiProperty({ 
-    description: 'Livestream title on YouTube', 
-    example: 'Morning coffe livestream'
-  })
-  @IsString()
-  title: string;
-
-  @ApiPropertyOptional({ 
-    description: 'Livestream description', 
-    example: 'Morning coffe livestream'
-  })
-  @IsOptional()
-  @IsString()
-  description?: string;
-
-  @ApiPropertyOptional({
-    enum: PrivacyStatus,
-    default: PrivacyStatus.UNLISTED,
-    example: PrivacyStatus.UNLISTED,
-  })
-  @IsOptional()
-  @IsEnum(PrivacyStatus)
-  privacyStatus?: PrivacyStatus;
 }

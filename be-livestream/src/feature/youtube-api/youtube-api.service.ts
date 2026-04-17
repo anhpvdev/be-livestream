@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { google, youtube_v3 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
+import { Readable } from 'stream';
 
 export interface CreateBroadcastParams {
   title: string;
@@ -10,6 +11,13 @@ export interface CreateBroadcastParams {
 }
 
 export interface CreateStreamResult {
+  streamId: string;
+  streamKey: string;
+  rtmpUrl: string;
+  backupRtmpUrl: string | null;
+}
+
+export interface StreamIngestionInfo {
   streamId: string;
   streamKey: string;
   rtmpUrl: string;
@@ -90,6 +98,29 @@ export class YouTubeApiService {
     };
   }
 
+  async getStreamIngestionInfo(
+    auth: OAuth2Client,
+    streamId: string,
+  ): Promise<StreamIngestionInfo> {
+    const youtube = this.getClient(auth);
+    const { data } = await youtube.liveStreams.list({
+      id: [streamId],
+      part: ['cdn'],
+    });
+
+    const stream = data.items?.[0];
+    if (!stream) {
+      throw new NotFoundException(`YouTube stream ${streamId} not found`);
+    }
+    const ingestionInfo = stream?.cdn?.ingestionInfo;
+    return {
+      streamId,
+      streamKey: ingestionInfo?.streamName || '',
+      rtmpUrl: ingestionInfo?.ingestionAddress || '',
+      backupRtmpUrl: ingestionInfo?.backupIngestionAddress || null,
+    };
+  }
+
   async bindBroadcastToStream(
     auth: OAuth2Client,
     broadcastId: string,
@@ -160,5 +191,22 @@ export class YouTubeApiService {
     const youtube = this.getClient(auth);
     await youtube.liveStreams.delete({ id: streamId });
     this.logger.log(`Stream ${streamId} deleted`);
+  }
+
+  async setThumbnail(
+    auth: OAuth2Client,
+    videoId: string,
+    imageBuffer: Buffer,
+    mimeType: string,
+  ): Promise<void> {
+    const youtube = this.getClient(auth);
+    await youtube.thumbnails.set({
+      videoId,
+      media: {
+        mimeType,
+        body: Readable.from(imageBuffer),
+      },
+    });
+    this.logger.log(`Thumbnail updated for video ${videoId}`);
   }
 }

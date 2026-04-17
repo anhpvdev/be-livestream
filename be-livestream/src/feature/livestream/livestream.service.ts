@@ -67,29 +67,28 @@ export class LivestreamService {
       throw new BadRequestException(preflight.message);
     }
     const { profile, media } = await this.resolveStartContext(dto);
-    const youtubeSession =
-      await this.youtubeOrchestrator.createAndBindBroadcast(
+    const youtubeSession = await this.resolveYoutubeSession(dto);
+
+    if (profile.thumbnailUrl) {
+      await this.youtubeOrchestrator.setBroadcastThumbnailFromUrl(
         dto.googleAccountId,
-        {
-          title: dto.title,
-          description: dto.description,
-          scheduledStartTime: new Date(),
-          privacyStatus: dto.privacyStatus || PrivacyStatus.UNLISTED,
-        },
+        youtubeSession.broadcastId,
+        profile.thumbnailUrl,
       );
+    }
 
     const livestream = this.livestreamRepo.create({
       googleAccountId: dto.googleAccountId,
       mediaFileId: media.id,
       profileId: dto.profileId,
-      title: dto.title,
-      description: dto.description,
+      title: profile.livestreamTitle || profile.name,
+      description: profile.livestreamDescription || profile.description,
       youtubeBroadcastId: youtubeSession.broadcastId,
       youtubeStreamId: youtubeSession.stream.streamId,
       youtubeStreamKey: youtubeSession.stream.streamKey,
       youtubeRtmpUrl: youtubeSession.stream.rtmpUrl,
       youtubeBackupRtmpUrl: youtubeSession.stream.backupRtmpUrl,
-      privacyStatus: dto.privacyStatus || PrivacyStatus.UNLISTED,
+      privacyStatus: profile.privacyStatus || PrivacyStatus.UNLISTED,
       status: LivestreamStatus.CREATED,
     });
     const saved = await this.livestreamRepo.save(livestream);
@@ -455,5 +454,47 @@ export class LivestreamService {
     }
 
     return { account, profile, media };
+  }
+
+  private async resolveYoutubeSession(dto: StartLivestreamDto) {
+    const profile = await this.livestreamProfileService.findById(dto.profileId);
+
+    if (!profile.livestreamTitle) {
+      throw new BadRequestException(
+        'Profile chưa có livestreamTitle, vui lòng cập nhật profile trước khi start',
+      );
+    }
+
+    if (profile.youtubeBroadcastId) {
+      if (!profile.youtubeStreamId || !profile.youtubeStreamKey) {
+        throw new BadRequestException(
+          'youtubeStreamId và youtubeStreamKey là bắt buộc khi profile dùng youtubeBroadcastId',
+        );
+      }
+
+      const existing = await this.youtubeOrchestrator.bindExistingBroadcast(
+        dto.googleAccountId,
+        profile.youtubeBroadcastId,
+        profile.youtubeStreamId,
+      );
+
+      return {
+        broadcastId: existing.broadcastId,
+        stream: {
+          streamId: profile.youtubeStreamId,
+          streamKey: profile.youtubeStreamKey,
+          rtmpUrl: profile.youtubeRtmpUrl || existing.stream.rtmpUrl,
+          backupRtmpUrl:
+            profile.youtubeBackupRtmpUrl ?? existing.stream.backupRtmpUrl,
+        },
+      };
+    }
+
+    return this.youtubeOrchestrator.createAndBindBroadcast(dto.googleAccountId, {
+      title: profile.livestreamTitle,
+      description: profile.livestreamDescription ?? undefined,
+      scheduledStartTime: new Date(),
+      privacyStatus: profile.privacyStatus || PrivacyStatus.UNLISTED,
+    });
   }
 }

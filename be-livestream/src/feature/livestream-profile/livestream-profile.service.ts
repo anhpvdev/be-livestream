@@ -11,11 +11,13 @@ import {
   AddProfileVideoDto,
   CreateLivestreamProfileDto,
   ReorderProfileVideosDto,
+  UpdateLivestreamProfileDto,
 } from './dto/livestream-profile.dto';
 import { MediaService } from '../media/media.service';
 import { MediaFileKind, MediaFileStatus } from '../media/entities/media.entity';
 import {
   Livestream,
+  PrivacyStatus,
   LivestreamStatus,
 } from '../livestream/entities/livestream.entity';
 
@@ -40,7 +42,59 @@ export class LivestreamProfileService {
       name: dto.name.trim(),
       description: dto.description ?? null,
       videoMediaIds: dto.videoMediaIds,
+      livestreamTitle: dto.livestreamTitle?.trim() ?? null,
+      livestreamDescription: dto.livestreamDescription ?? null,
+      thumbnailUrl: dto.thumbnailUrl ?? null,
+      privacyStatus: dto.privacyStatus ?? PrivacyStatus.UNLISTED,
+      youtubeBroadcastId: dto.youtubeBroadcastId ?? null,
+      youtubeStreamId: dto.youtubeStreamId ?? null,
+      youtubeStreamKey: dto.youtubeStreamKey ?? null,
+      youtubeRtmpUrl: dto.youtubeRtmpUrl ?? null,
+      youtubeBackupRtmpUrl: dto.youtubeBackupRtmpUrl ?? null,
     });
+    return this.profileRepo.save(profile);
+  }
+
+  async updateProfile(
+    id: string,
+    dto: UpdateLivestreamProfileDto,
+  ): Promise<LivestreamProfile> {
+    const profile = await this.findById(id);
+
+    if (dto.name !== undefined) {
+      profile.name = dto.name.trim();
+    }
+    if (dto.description !== undefined) {
+      profile.description = dto.description;
+    }
+    if (dto.livestreamTitle !== undefined) {
+      profile.livestreamTitle = dto.livestreamTitle.trim();
+    }
+    if (dto.livestreamDescription !== undefined) {
+      profile.livestreamDescription = dto.livestreamDescription;
+    }
+    if (dto.thumbnailUrl !== undefined) {
+      profile.thumbnailUrl = dto.thumbnailUrl;
+    }
+    if (dto.privacyStatus !== undefined) {
+      profile.privacyStatus = dto.privacyStatus;
+    }
+    if (dto.youtubeBroadcastId !== undefined) {
+      profile.youtubeBroadcastId = dto.youtubeBroadcastId;
+    }
+    if (dto.youtubeStreamId !== undefined) {
+      profile.youtubeStreamId = dto.youtubeStreamId;
+    }
+    if (dto.youtubeStreamKey !== undefined) {
+      profile.youtubeStreamKey = dto.youtubeStreamKey;
+    }
+    if (dto.youtubeRtmpUrl !== undefined) {
+      profile.youtubeRtmpUrl = dto.youtubeRtmpUrl;
+    }
+    if (dto.youtubeBackupRtmpUrl !== undefined) {
+      profile.youtubeBackupRtmpUrl = dto.youtubeBackupRtmpUrl;
+    }
+
     return this.profileRepo.save(profile);
   }
 

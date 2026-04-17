@@ -3,12 +3,18 @@ import { GoogleAccountService } from '../google-account/google-account.service';
 import {
   CreateBroadcastParams,
   CreateStreamResult,
+  StreamIngestionInfo,
   YouTubeApiService,
 } from './youtube-api.service';
 
 type CreateAndBindResult = {
   broadcastId: string;
   stream: CreateStreamResult;
+};
+
+type BindExistingResult = {
+  broadcastId: string;
+  stream: StreamIngestionInfo;
 };
 
 @Injectable()
@@ -44,6 +50,24 @@ export class YouTubeLivestreamOrchestratorService {
     };
   }
 
+  async bindExistingBroadcast(
+    googleAccountId: string,
+    broadcastId: string,
+    streamId: string,
+  ): Promise<BindExistingResult> {
+    const auth = await this.getAuthenticatedClient(googleAccountId);
+    await this.youtubeApiService.bindBroadcastToStream(auth, broadcastId, streamId);
+    const stream = await this.youtubeApiService.getStreamIngestionInfo(
+      auth,
+      streamId,
+    );
+
+    return {
+      broadcastId,
+      stream,
+    };
+  }
+
   async getBroadcastLifecycleStatus(
     googleAccountId: string,
     broadcastId: string,
@@ -59,6 +83,31 @@ export class YouTubeLivestreamOrchestratorService {
   ): Promise<void> {
     const auth = await this.getAuthenticatedClient(googleAccountId);
     await this.youtubeApiService.transitionBroadcast(auth, broadcastId, status);
+  }
+
+  async setBroadcastThumbnailFromUrl(
+    googleAccountId: string,
+    broadcastId: string,
+    thumbnailUrl: string,
+  ): Promise<void> {
+    const auth = await this.getAuthenticatedClient(googleAccountId);
+    const response = await fetch(thumbnailUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch thumbnail from URL: ${thumbnailUrl}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const isPng = contentType.includes('image/png');
+    const isJpeg =
+      contentType.includes('image/jpeg') || contentType.includes('image/jpg');
+    if (!isPng && !isJpeg) {
+      throw new Error(
+        `Unsupported thumbnail mime type: ${contentType || 'unknown'}`,
+      );
+    }
+    const mimeType = isPng ? 'image/png' : 'image/jpeg';
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await this.youtubeApiService.setThumbnail(auth, broadcastId, buffer, mimeType);
   }
 
   async waitForStreamReady(

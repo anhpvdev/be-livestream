@@ -14,6 +14,7 @@ import {
   AddProfileVideoDto,
   CreateLivestreamProfileDto,
   ReorderProfileVideosDto,
+  UpdateLivestreamProfileDto,
 } from './dto/livestream-profile.dto';
 import { LivestreamProfile } from './entities/livestream-profile.entity';
 
@@ -45,6 +46,16 @@ export class LivestreamProfileController {
     @Param('profileId', ParseUUIDPipe) profileId: string,
   ): Promise<LivestreamProfile> {
     return this.livestreamProfileService.findById(profileId);
+  }
+
+  @Patch(':profileId')
+  @ApiOperation({ summary: 'Cập nhật metadata/setting của livestream profile' })
+  @ApiBody({ type: UpdateLivestreamProfileDto })
+  async updateProfile(
+    @Param('profileId', ParseUUIDPipe) profileId: string,
+    @Body() dto: UpdateLivestreamProfileDto,
+  ): Promise<LivestreamProfile> {
+    return this.livestreamProfileService.updateProfile(profileId, dto);
   }
 
   @Delete(':profileId')

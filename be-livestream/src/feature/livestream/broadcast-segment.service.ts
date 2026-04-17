@@ -146,11 +146,6 @@ export class BroadcastSegmentService {
     });
     const savedNext = await this.segmentRepo.save(next);
 
-    await this.youtubeOrchestrator.waitForStreamReady(
-      ls.googleAccountId,
-      youtubeSession.stream.streamId,
-    );
-
     const progress = await this.progressRepo.findOne({
       where: { livestreamId: ls.id },
       order: { updatedAt: 'DESC' },
@@ -173,6 +168,10 @@ export class BroadcastSegmentService {
       seekTo,
       EncoderNode.PRIMARY,
     );
+    await this.youtubeOrchestrator.waitForStreamReady(
+      ls.googleAccountId,
+      youtubeSession.stream.streamId,
+    );
 
     try {
       await this.youtubeOrchestrator.transitionBroadcast(
@@ -184,12 +183,6 @@ export class BroadcastSegmentService {
       this.logger.warn(`Failed to complete old broadcast: ${err.message}`);
     }
 
-    await this.youtubeOrchestrator.transitionBroadcast(
-      ls.googleAccountId,
-      youtubeSession.broadcastId,
-      'testing',
-    );
-    await this.sleep(8000);
     await this.youtubeOrchestrator.transitionBroadcast(
       ls.googleAccountId,
       youtubeSession.broadcastId,
