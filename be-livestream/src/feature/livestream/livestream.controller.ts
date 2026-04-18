@@ -8,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -23,6 +24,7 @@ import {
   StartLivestreamAckDto,
   LivestreamStatusResponseDto,
 } from './dto/livestream-response.dto';
+import { ListLivestreamQueryDto } from './dto/list-livestream-query.dto';
 
 @ApiTags('Livestream')
 @Controller('livestream')
@@ -83,9 +85,16 @@ export class LivestreamController {
   @Get()
   @ApiOperation({ summary: 'List all livestreams' })
   @ApiOkResponse({ type: [LivestreamResponseDto] })
-  async findAll(): Promise<LivestreamResponseDto[]> {
-    const list = await this.livestreamService.findAll();
+  async findAll(@Query() query: ListLivestreamQueryDto): Promise<LivestreamResponseDto[]> {
+    const list = await this.livestreamService.findAll(query.status);
     return list.map((ls) => this.livestreamService.toResponse(ls));
+  }
+
+  @Delete()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete all livestreams' })
+  async removeAll(): Promise<void> {
+    await this.livestreamService.removeAllLivestreams();
   }
 
   @Delete(':id')

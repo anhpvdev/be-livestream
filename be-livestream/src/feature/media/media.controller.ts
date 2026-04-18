@@ -8,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -23,6 +24,7 @@ import {
 import { MediaService } from './media.service';
 import { MediaResponseDto } from './dto/media-response.dto';
 import { UploadMediaDto } from './dto/upload-media.dto';
+import { ListMediaQueryDto } from './dto/list-media-query.dto';
 
 @ApiTags('Media')
 @Controller('media')
@@ -57,8 +59,8 @@ export class MediaController {
   @Get()
   @ApiOperation({ summary: 'List all media files' })
   @ApiOkResponse({ type: [MediaResponseDto] })
-  async findAll(): Promise<MediaResponseDto[]> {
-    const list = await this.mediaService.findAll();
+  async findAll(@Query() query: ListMediaQueryDto): Promise<MediaResponseDto[]> {
+    const list = await this.mediaService.findAll(query);
     return list.map((m) => this.toResponse(m));
   }
 

@@ -10,7 +10,6 @@ import { YouTubeApiModule } from '../youtube-api/youtube-api.module';
 import { GoogleAccountModule } from '../google-account/google-account.module';
 import { MediaModule } from '../media/media.module';
 import { EncoderModule } from '../encoder/encoder.module';
-import { SystemConfigModule } from '../system-config/system-config.module';
 import { LivestreamProfileModule } from '../livestream-profile/livestream-profile.module';
 import { EncoderJob } from '../encoder/entities/encoder-job.entity';
 
@@ -25,7 +24,6 @@ import { EncoderJob } from '../encoder/entities/encoder-job.entity';
     YouTubeApiModule,
     GoogleAccountModule,
     MediaModule,
-    SystemConfigModule,
     LivestreamProfileModule,
     forwardRef(() => EncoderModule),
   ],

@@ -8,6 +8,7 @@ export type EncoderJobRow = {
   backup_rtmp_url: string | null;
   stream_key: string | null;
   seek_to: string | null;
+  seek_mode: 'normal' | 'failover' | null;
   profile_id: string | null;
   current_video_index: number | null;
   current_media_id: string | null;

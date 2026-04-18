@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { EncoderVps } from './entities/encoder-vps.entity';
 import { Livestream, LivestreamStatus } from '../livestream/entities/livestream.entity';
 import { UpdateEncoderVpsDto } from './dto/encoder-vps.dto';
 import { RegisterEncoderVpsWebhookDto } from './dto/encoder-vps-webhook.dto';
+import { EncoderVpsStatus } from './dto/list-encoder-vps-query.dto';
 
 export type EncoderVpsListItem = {
   id: string;
@@ -90,6 +92,32 @@ export class EncoderVpsService {
     return this.vpsRepo.save(row);
   }
 
+  async remove(id: string): Promise<void> {
+    const row = await this.vpsRepo.findOne({ where: { id } });
+    if (!row) {
+      throw new NotFoundException(`Encoder VPS ${id} not found`);
+    }
+    const occupied = await this.livestreamRepo.findOne({
+      where: [
+        {
+          primaryEncoderVpsId: id,
+          status: In([LivestreamStatus.LIVE, LivestreamStatus.TESTING]),
+        },
+        {
+          backupEncoderVpsId: id,
+          status: In([LivestreamStatus.LIVE, LivestreamStatus.TESTING]),
+        },
+      ],
+      select: ['id'],
+    });
+    if (occupied) {
+      throw new ConflictException(
+        `Không thể xóa VPS đang được livestream ${occupied.id} sử dụng`,
+      );
+    }
+    await this.vpsRepo.delete({ id });
+  }
+
   async findById(id: string): Promise<EncoderVps | null> {
     return this.vpsRepo.findOne({ where: { id } });
   }
@@ -149,7 +177,11 @@ export class EncoderVpsService {
   /**
    * Danh sách VPS + trạng thái free / đang gán cho livestream LIVE hoặc TESTING.
    */
-  async listWithUsage(): Promise<EncoderVpsListItem[]> {
+  async listWithUsage(filter?: {
+    status?: EncoderVpsStatus;
+    enabled?: boolean;
+    isFree?: boolean;
+  }): Promise<EncoderVpsListItem[]> {
     const all = await this.vpsRepo.find({ order: { createdAt: 'DESC' } });
     const streams = await this.livestreamRepo.find({
       where: {
@@ -182,7 +214,7 @@ export class EncoderVpsService {
       }
     }
 
-    return all.map((v) => {
+    const items = all.map((v) => {
       const u = usage.get(v.id);
       return {
         id: v.id,
@@ -196,6 +228,12 @@ export class EncoderVpsService {
         busyAs: u?.role ?? null,
         busyLivestreamId: u?.livestreamId ?? null,
       };
+    });
+    return items.filter((item) => {
+      if (filter?.status && item.status !== filter.status) return false;
+      if (filter?.enabled !== undefined && item.enabled !== filter.enabled) return false;
+      if (filter?.isFree !== undefined && item.isFree !== filter.isFree) return false;
+      return true;
     });
   }
 

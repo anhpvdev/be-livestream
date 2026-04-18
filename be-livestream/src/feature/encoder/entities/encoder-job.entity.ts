@@ -12,6 +12,11 @@ export enum EncoderDesiredState {
   STOPPED = 'stopped',
 }
 
+export enum EncoderSeekMode {
+  NORMAL = 'normal',
+  FAILOVER = 'failover',
+}
+
 @Entity('encoder_jobs')
 export class EncoderJob {
   @PrimaryColumn({ type: 'uuid', name: 'livestream_id' })
@@ -35,6 +40,14 @@ export class EncoderJob {
 
   @Column({ type: 'varchar', length: 20, name: 'seek_to', nullable: true })
   seekTo: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 16,
+    name: 'seek_mode',
+    default: EncoderSeekMode.NORMAL,
+  })
+  seekMode: EncoderSeekMode;
 
   @Column({ type: 'uuid', name: 'profile_id', nullable: true })
   profileId: string | null;

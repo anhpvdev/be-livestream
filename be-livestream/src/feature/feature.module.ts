@@ -4,7 +4,6 @@ import { GoogleAccountModule } from './google-account/google-account.module';
 import { MediaModule } from './media/media.module';
 import { LivestreamModule } from './livestream/livestream.module';
 import { EncoderModule } from './encoder/encoder.module';
-import { SystemConfigModule } from './system-config/system-config.module';
 import { LivestreamProfileModule } from './livestream-profile/livestream-profile.module';
 
 @Module({
@@ -15,7 +14,6 @@ import { LivestreamProfileModule } from './livestream-profile/livestream-profile
     LivestreamModule,
     LivestreamProfileModule,
     EncoderModule,
-    SystemConfigModule,
   ],
   exports: [],
 })

@@ -24,6 +24,15 @@ export class EncoderHostMetricsDto {
     nullable: true,
   })
   gpu?: null | Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Phần trăm RAM sử dụng (vd: 62.45%)' })
+  ram_percent?: string;
+
+  @ApiPropertyOptional({ description: 'Phần trăm CPU sử dụng (ước lượng theo loadavg 1m)' })
+  cpu_percent?: string;
+
+  @ApiPropertyOptional({ description: 'Phần trăm GPU sử dụng (nếu có probe GPU)' })
+  gpu_percent?: string | null;
 }
 
 export class EncoderHealthResponse {
@@ -44,6 +53,9 @@ export class EncoderHealthResponse {
 
   @ApiPropertyOptional()
   bitrate: string;
+
+  @ApiPropertyOptional({ description: 'Bitrate tính theo Mbps (vd: 4.12 Mbps)' })
+  bitrate_mbps?: string;
 
   @ApiPropertyOptional()
   speed: string;

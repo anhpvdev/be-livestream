@@ -146,7 +146,7 @@ export class LivestreamStatusResponseDto extends LivestreamResponseDto {
   currentTimestampStr: string;
 
   @ApiPropertyOptional({ description: 'Encoder node in use' })
-  encoderNode: string;
+  encoderNode: string | null;
 
   @ApiPropertyOptional({ description: 'YouTube broadcast lifecycle status' })
   youtubeBroadcastStatus: string;
@@ -174,6 +174,18 @@ export class LivestreamStatusResponseDto extends LivestreamResponseDto {
     description: 'Thông số VPS + health hiện tại của encoder primary/backup',
   })
   encoderNodes: LivestreamEncoderNodesDto;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Node thực tế đang giữ role primary runtime sau failover',
+  })
+  effectivePrimaryNode: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Node thực tế đang giữ role backup runtime sau failover',
+  })
+  effectiveBackupNode: string | null;
 }
 
 export class StartLivestreamAckDto {

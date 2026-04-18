@@ -17,6 +17,7 @@ import { MediaService } from '../media/media.service';
 import { MediaFileKind, MediaFileStatus } from '../media/entities/media.entity';
 import { EncoderService } from '../encoder/encoder.service';
 import { EncoderHealthService } from '../encoder/encoder-health.service';
+import { EncoderHealthResponse } from '../encoder/dto/encoder-status.dto';
 import { EncoderNode } from '../encoder/entities/encoder-session.entity';
 import { StartLivestreamDto } from './dto/start-livestream.dto';
 import { BroadcastSegmentService } from './broadcast-segment.service';
@@ -401,11 +402,23 @@ export class LivestreamService {
       this.encoderService.getHealth(EncoderNode.PRIMARY, id),
       this.encoderService.getHealth(EncoderNode.BACKUP, id),
     ]);
+    const normalizedPrimaryHealth = this.normalizeHealthMetrics(primaryHealth);
+    const normalizedBackupHealth = this.normalizeHealthMetrics(backupHealth);
     const playlistAuthorityNode = encoderJob?.activeNode ?? null;
     const isPrimaryAuthority =
-      !!playlistAuthorityNode && playlistAuthorityNode === (primaryHealth?.node ?? null);
+      !!playlistAuthorityNode &&
+      playlistAuthorityNode === (normalizedPrimaryHealth?.node ?? null);
     const isBackupAuthority =
-      !!playlistAuthorityNode && playlistAuthorityNode === (backupHealth?.node ?? null);
+      !!playlistAuthorityNode &&
+      playlistAuthorityNode === (normalizedBackupHealth?.node ?? null);
+    const effectivePrimaryNode =
+      isBackupAuthority
+        ? (normalizedBackupHealth?.node ?? null)
+        : (normalizedPrimaryHealth?.node ?? null);
+    const effectiveBackupNode =
+      isBackupAuthority
+        ? (normalizedPrimaryHealth?.node ?? null)
+        : (normalizedBackupHealth?.node ?? null);
 
     const [primaryVpsRow, backupVpsRow] = await Promise.all([
       livestream.primaryEncoderVpsId
@@ -444,11 +457,13 @@ export class LivestreamService {
       ),
       currentTimestampStr:
         progress?.currentTimestampStr ?? '00:00:00.000',
-      encoderNode: activeSession?.encoderNode || null,
+      encoderNode: playlistAuthorityNode ?? activeSession?.encoderNode ?? null,
       youtubeBroadcastStatus,
       encoderJobActiveNode: encoderJob?.activeNode ?? null,
       encoderCurrentMediaId: encoderJob?.currentMediaId ?? null,
       encoderCurrentVideoIndex: encoderJob?.currentVideoIndex ?? null,
+      effectivePrimaryNode,
+      effectiveBackupNode,
       encoderNodes: {
         primary: {
           encoderVpsId: livestream.primaryEncoderVpsId,
@@ -459,7 +474,7 @@ export class LivestreamService {
           vpsEnabled: primaryVpsRow?.enabled ?? null,
           vpsLastSeenAt: primaryVpsRow?.lastSeenAt ?? null,
           urlSource: primaryUrlSource,
-          health: primaryHealth ?? null,
+          health: normalizedPrimaryHealth ?? null,
           isPlaylistAuthority: isPrimaryAuthority,
         },
         backup: {
@@ -471,7 +486,7 @@ export class LivestreamService {
           vpsEnabled: backupVpsRow?.enabled ?? null,
           vpsLastSeenAt: backupVpsRow?.lastSeenAt ?? null,
           urlSource: backupUrlSource,
-          health: backupHealth ?? null,
+          health: normalizedBackupHealth ?? null,
           isPlaylistAuthority: isBackupAuthority,
         },
         playlistAuthorityNode,
@@ -479,10 +494,28 @@ export class LivestreamService {
     };
   }
 
-  async findAll(): Promise<Livestream[]> {
+  async findAll(status?: LivestreamStatus): Promise<Livestream[]> {
+    const where = status ? { status } : undefined;
     return this.livestreamRepo.find({
+      where,
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async removeAllLivestreams(): Promise<void> {
+    const all = await this.livestreamRepo.find({
+      select: ['id', 'status'],
+    });
+    for (const ls of all) {
+      if (
+        ls.status === LivestreamStatus.LIVE ||
+        ls.status === LivestreamStatus.TESTING
+      ) {
+        await this.encoderService.stopEncoder(ls.id).catch(() => undefined);
+        this.encoderHealthService.stopMonitoring(ls.id);
+      }
+      await this.livestreamRepo.delete({ id: ls.id });
+    }
   }
 
   async removeLivestream(id: string): Promise<void> {
@@ -531,6 +564,55 @@ export class LivestreamService {
   ): number | null {
     if (value === null || value === undefined) return null;
     return typeof value === 'bigint' ? Number(value) : value;
+  }
+
+  private normalizeHealthMetrics(
+    health: EncoderHealthResponse | null,
+  ): EncoderHealthResponse | null {
+    if (!health) return null;
+    const next = { ...health };
+    const host = (health.host as Record<string, unknown> | undefined) ?? undefined;
+
+    const bitrateRaw = typeof health.bitrate === 'string' ? health.bitrate : '';
+    const kbpsMatch = bitrateRaw.match(/([\d.]+)\s*kbits\/s/i);
+    if (kbpsMatch) {
+      const kbps = Number(kbpsMatch[1]);
+      if (Number.isFinite(kbps)) {
+        next.bitrate_mbps = `${(kbps / 1000).toFixed(2)} Mbps`;
+      }
+    }
+
+    if (!host) return next;
+    const hostNext = { ...host };
+    const totalMem = Number(host.totalmem ?? NaN);
+    const freeMem = Number(host.freemem ?? NaN);
+    if (Number.isFinite(totalMem) && totalMem > 0 && Number.isFinite(freeMem)) {
+      const usedPercent = ((totalMem - freeMem) / totalMem) * 100;
+      hostNext.ram_percent = `${Math.max(0, Math.min(100, usedPercent)).toFixed(2)}%`;
+    }
+
+    const loadavg = Array.isArray(host.loadavg) ? host.loadavg : [];
+    const load1 = Number(loadavg[0] ?? NaN);
+    if (Number.isFinite(load1)) {
+      // Không có cpu core count trong payload; dùng baseline 1 core để biểu diễn tương đối.
+      const cpuPercent = load1 * 100;
+      hostNext.cpu_percent = `${Math.max(0, cpuPercent).toFixed(2)}%`;
+    }
+
+    const gpu = host.gpu as Record<string, unknown> | null | undefined;
+    if (gpu && typeof gpu === 'object') {
+      const gpuPercent = Number(gpu.utilization ?? gpu.gpu_utilization ?? NaN);
+      if (Number.isFinite(gpuPercent)) {
+        hostNext.gpu_percent = `${Math.max(0, Math.min(100, gpuPercent)).toFixed(2)}%`;
+      } else {
+        hostNext.gpu_percent = null;
+      }
+    } else {
+      hostNext.gpu_percent = null;
+    }
+
+    next.host = hostNext;
+    return next;
   }
 
   private async promoteLivestreamToLive(livestreamId: string): Promise<void> {

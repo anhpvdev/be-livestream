@@ -47,8 +47,8 @@ export class BroadcastSegment {
   @Column({ type: 'timestamptz' })
   plannedStartAt: Date;
 
-  @Column({ type: 'timestamptz' })
-  plannedEndAt: Date;
+  @Column({ type: 'timestamptz', nullable: true })
+  plannedEndAt: Date | null;
 
   @Index('idx_broadcast_segments_status')
   @Column({

@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EncoderService } from './encoder.service';
 import { EncoderNode } from './entities/encoder-session.entity';
-import { LivestreamProgress } from '../livestream/entities/livestream-progress.entity';
+import { EncoderSeekMode } from './entities/encoder-job.entity';
 import {
   Livestream,
   LivestreamStatus,
@@ -16,8 +16,6 @@ export class EncoderFailoverService {
 
   constructor(
     private readonly encoderService: EncoderService,
-    @InjectRepository(LivestreamProgress)
-    private readonly progressRepo: Repository<LivestreamProgress>,
     @InjectRepository(Livestream)
     private readonly livestreamRepo: Repository<Livestream>,
   ) {}
@@ -26,18 +24,12 @@ export class EncoderFailoverService {
     livestream: Livestream,
     media: MediaFile,
     failedNode: EncoderNode,
+    seekTo = '00:00:00.000',
   ): Promise<void> {
     const backupNode =
       failedNode === EncoderNode.PRIMARY
         ? EncoderNode.BACKUP
         : EncoderNode.PRIMARY;
-
-    const progress = await this.progressRepo.findOne({
-      where: { livestreamId: livestream.id },
-      order: { updatedAt: 'DESC' },
-    });
-
-    const seekTo = progress?.currentTimestampStr || '00:00:00.000';
 
     this.logger.log(
       `Executing failover for livestream ${livestream.id}: ` +
@@ -50,6 +42,8 @@ export class EncoderFailoverService {
         media,
         seekTo,
         backupNode,
+        null,
+        EncoderSeekMode.FAILOVER,
       );
 
       livestream.status = LivestreamStatus.LIVE;

@@ -9,6 +9,7 @@ import { AppEnv } from '@/core/config/app-configs';
 import { EncoderFailoverService } from './encoder-failover.service';
 import { Livestream } from '../livestream/entities/livestream.entity';
 import { MediaFile } from '../media/entities/media.entity';
+import { EncoderJob } from './entities/encoder-job.entity';
 
 interface MonitoredStream {
   livestreamId: string;
@@ -36,6 +37,8 @@ export class EncoderHealthService implements OnModuleDestroy {
     private readonly livestreamRepo: Repository<Livestream>,
     @InjectRepository(MediaFile)
     private readonly mediaRepo: Repository<MediaFile>,
+    @InjectRepository(EncoderJob)
+    private readonly encoderJobRepo: Repository<EncoderJob>,
   ) {
     this.healthIntervalMs = this.configService.get<number>(
       'ENCODER_HEALTH_INTERVAL_MS',
@@ -191,8 +194,16 @@ export class EncoderHealthService implements OnModuleDestroy {
       where: { livestreamId },
       order: { updatedAt: 'DESC' },
     });
-
-    const seekTo = progress?.currentTimestampStr || '00:00:00.000';
+    const job = await this.encoderJobRepo.findOne({
+      where: { livestreamId },
+      select: ['currentTimestampStr', 'currentTimestampMs'],
+    });
+    const seekTo = this.pickBestSeekTo(
+      progress?.currentTimestampStr ?? null,
+      this.toNumber(progress?.currentTimestampMs),
+      job?.currentTimestampStr ?? null,
+      this.toNumber(job?.currentTimestampMs),
+    );
     const backupNode = this.getBackupNode(monitor.currentNode);
 
     const livestream = await this.livestreamRepo.findOne({
@@ -220,6 +231,7 @@ export class EncoderHealthService implements OnModuleDestroy {
         livestream,
         media,
         monitor.currentNode,
+        seekTo,
       );
       monitor.currentNode = backupNode;
       monitor.missCount = 0;
@@ -237,5 +249,37 @@ export class EncoderHealthService implements OnModuleDestroy {
     return current === EncoderNode.PRIMARY
       ? EncoderNode.BACKUP
       : EncoderNode.PRIMARY;
+  }
+
+  private pickBestSeekTo(
+    progressStr: string | null,
+    progressMs: number | null,
+    jobStr: string | null,
+    jobMs: number | null,
+  ): string {
+    const candidates = [
+      { str: progressStr, ms: progressMs ?? this.parseTimestampToMs(progressStr) },
+      { str: jobStr, ms: jobMs ?? this.parseTimestampToMs(jobStr) },
+    ].filter((x): x is { str: string; ms: number } => !!x.str && Number.isFinite(x.ms ?? NaN));
+
+    if (!candidates.length) return '00:00:00.000';
+    candidates.sort((a, b) => b.ms - a.ms);
+    return candidates[0].str;
+  }
+
+  private parseTimestampToMs(value: string | null): number | null {
+    if (!value) return null;
+    const match = value.match(/(\d+):(\d+):(\d+)\.(\d+)/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3]);
+    const millis = Number(match[4].padEnd(3, '0').slice(0, 3));
+    return hours * 3600000 + minutes * 60000 + seconds * 1000 + millis;
+  }
+
+  private toNumber(value: number | bigint | null | undefined): number | null {
+    if (value === null || value === undefined) return null;
+    return typeof value === 'bigint' ? Number(value) : value;
   }
 }

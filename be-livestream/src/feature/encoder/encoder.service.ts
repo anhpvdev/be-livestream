@@ -7,7 +7,11 @@ import {
   EncoderNode,
   EncoderSessionStatus,
 } from './entities/encoder-session.entity';
-import { EncoderDesiredState, EncoderJob } from './entities/encoder-job.entity';
+import {
+  EncoderDesiredState,
+  EncoderJob,
+  EncoderSeekMode,
+} from './entities/encoder-job.entity';
 import { Livestream } from '../livestream/entities/livestream.entity';
 import { MediaFile } from '../media/entities/media.entity';
 import { AppEnv } from '@/core/config/app-configs';
@@ -40,6 +44,7 @@ export class EncoderService {
     seekTo = '00:00:00.000',
     node: EncoderNode = EncoderNode.PRIMARY,
     profileId: string | null = null,
+    seekMode: EncoderSeekMode = EncoderSeekMode.NORMAL,
   ): Promise<EncoderSession> {
     const payload = {
       mediaPath: `/data/media/${media.storageKey}`,
@@ -47,6 +52,7 @@ export class EncoderService {
       backupRtmpUrl: livestream.youtubeBackupRtmpUrl,
       streamKey: livestream.youtubeStreamKey,
       seekTo,
+      seekMode,
       currentMediaId: media.id,
     };
     await this.enqueueRunJob(livestream.id, payload, profileId);
@@ -101,6 +107,7 @@ export class EncoderService {
       backupRtmpUrl: string | null;
       streamKey: string;
       seekTo: string;
+      seekMode: EncoderSeekMode;
       currentMediaId: string | null;
     },
     profileId: string | null,
@@ -114,6 +121,7 @@ export class EncoderService {
     job.backupRtmpUrl = payload.backupRtmpUrl;
     job.streamKey = payload.streamKey;
     job.seekTo = payload.seekTo;
+    job.seekMode = payload.seekMode;
     job.profileId = profileId;
     job.currentVideoIndex = 0;
     job.currentMediaId = payload.currentMediaId;
@@ -130,6 +138,7 @@ export class EncoderService {
 
     job.desiredState = EncoderDesiredState.STOPPED;
     job.activeNode = null;
+    job.seekMode = EncoderSeekMode.NORMAL;
 
     await this.jobRepo.save(job);
   }
@@ -145,9 +154,15 @@ export class EncoderService {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(`${url}/health`, { signal: controller.signal });
       clearTimeout(timer);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        this.logger.warn(`Encoder health check failed: url=${url}, status=${res.status}`);
+        return null;
+      }
       return (await res.json()) as EncoderHealthResponse;
-    } catch {
+    } catch (error) {
+      this.logger.warn(
+        `Encoder health check error: url=${url}, reason=${error instanceof Error ? error.message : String(error)}`,
+      );
       return null;
     }
   }
@@ -256,10 +271,21 @@ export class EncoderService {
     });
   }
 
-  async listJobs(): Promise<EncoderJob[]> {
+  async listJobs(desiredState?: EncoderDesiredState): Promise<EncoderJob[]> {
+    const where = desiredState ? { desiredState } : undefined;
     return this.jobRepo.find({
+      where,
       order: { updatedAt: 'DESC' },
     });
+  }
+
+  async deleteAllJobs(): Promise<void> {
+    const allJobs = await this.jobRepo.find({
+      select: ['livestreamId', 'desiredState'],
+    });
+    for (const job of allJobs) {
+      await this.deleteJob(job.livestreamId);
+    }
   }
 
   async deleteJob(livestreamId: string): Promise<void> {

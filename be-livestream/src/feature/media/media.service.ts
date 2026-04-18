@@ -10,13 +10,12 @@ import { In, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { MediaFile, MediaFileStatus } from './entities/media.entity';
+import { MediaFile, MediaFileKind, MediaFileStatus } from './entities/media.entity';
 import {
   Livestream,
   LivestreamStatus,
 } from '../livestream/entities/livestream.entity';
 import { UploadMediaDto } from './dto/upload-media.dto';
-
 @Injectable()
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
@@ -72,8 +71,15 @@ export class MediaService {
     return media;
   }
 
-  async findAll(): Promise<MediaFile[]> {
+  async findAll(filter?: {
+    status?: MediaFileStatus;
+    type?: MediaFileKind;
+  }): Promise<MediaFile[]> {
+    const where: Partial<MediaFile> = {};
+    if (filter?.status) where.status = filter.status;
+    if (filter?.type) where.kind = filter.type;
     return this.mediaRepo.find({
+      where,
       order: {
         kind: 'ASC',
         name: 'ASC',

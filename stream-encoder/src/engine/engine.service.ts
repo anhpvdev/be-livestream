@@ -25,6 +25,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private readonly prefetchLogSkips: boolean;
   private readonly cacheDir: string;
   private readonly ownerLeaseMs: number;
+  private readonly advanceGraceMs: number;
   private pg: Client;
 
   private pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -39,6 +40,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private currentFrames = 0;
   private currentBitrate = '0kbits/s';
   private currentSpeed = '0x';
+  private lastCompletedAtMs: number | null = null;
   private currentLockKey: string | null = null;
   private currentBackupLockKey: string | null = null;
   private stderrBuffer = '';
@@ -60,6 +62,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       this.config.get<string>('ENGINE_PREFETCH_LOG_SKIPS', 'false') === 'true';
     this.cacheDir = this.config.get<string>('ENGINE_CACHE_DIR', '/tmp/encoder-cache');
     this.ownerLeaseMs = this.config.get<number>('ENGINE_OWNER_LEASE_MS', 6000);
+    this.advanceGraceMs = this.config.get<number>('ENGINE_ADVANCE_GRACE_MS', 1500);
 
     this.pg = this.createPgClient();
   }
@@ -145,7 +148,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
   private async pollOnce(): Promise<void> {
     const { rows } = await this.pg.query<EncoderJobRow>(
-      `SELECT livestream_id, desired_state, media_path, rtmp_url, backup_rtmp_url, stream_key, seek_to, profile_id, current_video_index, current_media_id, playlist_generation, owner_node, owner_epoch, lease_until
+      `SELECT livestream_id, desired_state, media_path, rtmp_url, backup_rtmp_url, stream_key, seek_to, seek_mode, profile_id, current_video_index, current_media_id, playlist_generation, owner_node, owner_epoch, lease_until
        FROM encoder_jobs
        WHERE desired_state = 'running'
        ORDER BY updated_at DESC
@@ -328,7 +331,14 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       this.currentOutputRtmpUrl !== targetRtmpBase;
 
     if (shouldRestart && targetMediaPath) {
-      const effectiveSeekTo = this.resolveSeekTo(job);
+      const isMediaChanged =
+        !!this.currentMediaId &&
+        !!targetMediaId &&
+        this.currentMediaId !== targetMediaId;
+      const effectiveSeekTo = this.resolveSeekTo(
+        job,
+        isMediaChanged,
+      );
       this.startFfmpeg({
         mediaPath: targetMediaPath,
         mediaId: targetMediaId,
@@ -337,6 +347,9 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         seekTo: effectiveSeekTo,
         livestreamId: job.livestream_id,
       });
+      if (job.seek_mode === 'failover') {
+        await this.consumeFailoverSeekMode(job.livestream_id);
+      }
     }
 
     await this.updateHeartbeat(isPlaylistController, dualIngest, ownerEpoch);
@@ -400,6 +413,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         `Media finished on node=${this.nodeName}, livestream=${params.livestreamId}, mediaId=${params.mediaId ?? 'unknown'}, exitCode=${code ?? 'null'}`,
       );
       this.currentStatus = code === 0 ? 'completed' : 'crashed';
+      this.lastCompletedAtMs = code === 0 ? Date.now() : null;
       this.currentProcess = null;
     });
   }
@@ -419,6 +433,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     this.currentFrames = 0;
     this.currentBitrate = '0kbits/s';
     this.currentSpeed = '0x';
+    this.lastCompletedAtMs = null;
     if (this.currentLockKey) {
       await this.pg.query('SELECT pg_advisory_unlock($1::bigint)', [this.currentLockKey]).catch(() => undefined);
       this.currentLockKey = null;
@@ -539,6 +554,15 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     return (result.rowCount ?? 0) > 0;
   }
 
+  private async consumeFailoverSeekMode(livestreamId: string): Promise<void> {
+    await this.pg.query(
+      `UPDATE encoder_jobs
+       SET seek_mode = 'normal'
+       WHERE livestream_id = $1`,
+      [livestreamId],
+    );
+  }
+
   private async ensureOwnershipColumns(): Promise<void> {
     await this.pg.query(
       `ALTER TABLE encoder_jobs
@@ -564,21 +588,32 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       `ALTER TABLE encoder_jobs
          ADD COLUMN IF NOT EXISTS playlist_generation int NOT NULL DEFAULT 0`,
     );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS seek_mode varchar(16) NOT NULL DEFAULT 'normal'`,
+    );
   }
 
   private shouldAdvancePlaylist(
     livestreamId: string,
     isPlaylistController: boolean,
   ): boolean {
+    const completedLongEnough =
+      this.lastCompletedAtMs !== null &&
+      Date.now() - this.lastCompletedAtMs >= this.advanceGraceMs;
     return (
       isPlaylistController &&
       this.currentLivestreamId === livestreamId &&
       this.currentStatus === 'completed' &&
-      !this.currentProcess
+      !this.currentProcess &&
+      completedLongEnough
     );
   }
 
-  private resolveSeekTo(job: EncoderJobRow): string {
+  private resolveSeekTo(job: EncoderJobRow, isMediaChanged: boolean): string {
+    if (isMediaChanged) {
+      return '00:00:00.000';
+    }
     // Khi vừa hoàn tất clip trước đó, clip kế tiếp luôn phát từ đầu.
     if (
       this.currentLivestreamId === job.livestream_id &&
@@ -587,7 +622,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     ) {
       return '00:00:00.000';
     }
-    return job.seek_to || '00:00:00.000';
+    // Main node đang chạy bình thường không dùng seek_to từ DB.
+    // seek_to chỉ dùng khi BE gắn cờ explicit seek_mode=failover.
+    if (job.seek_mode === 'failover') {
+      return job.seek_to || '00:00:00.000';
+    }
+    return '00:00:00.000';
   }
 
   private async loadProfileMediaIds(profileId: string): Promise<string[]> {

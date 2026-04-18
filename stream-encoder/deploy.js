@@ -26,7 +26,7 @@ const cwd = __dirname;
 const projectName = `stream-encoder-${port}`;
 const encoderNodeId = process.env.ENCODER_NODE_ID || `encoder-node-${port}`;
 const encoderDisplayName = process.env.ENCODER_VPS_DISPLAY_NAME || `encoder-${port}`;
-const encoderPublicHost = process.env.ENCODER_PUBLIC_HOST || 'host.docker.internal';
+const encoderPublicHost = process.env.ENCODER_PUBLIC_HOST || 'localhost';
 const encoderPublicBaseUrl =
   process.env.ENCODER_PUBLIC_BASE_URL || `http://${encoderPublicHost}:${port}`;
 const backendRegisterUrl =

@@ -8,6 +8,7 @@ export const envSchema = z.object({
   ENGINE_PREFETCH_LOG_SKIPS: z.enum(['true', 'false']).default('false'),
   ENGINE_CACHE_DIR: z.string().default('/tmp/encoder-cache'),
   ENGINE_OWNER_LEASE_MS: z.coerce.number().int().positive().default(6000),
+  ENGINE_ADVANCE_GRACE_MS: z.coerce.number().int().nonnegative().default(1500),
   POSTGRES_HOST: z.string().default('localhost'),
   POSTGRES_PORT: z.coerce.number().int().default(5432),
   POSTGRES_DB: z.string().min(1),
