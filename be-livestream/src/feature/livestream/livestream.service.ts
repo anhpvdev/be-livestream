@@ -70,6 +70,7 @@ export class LivestreamService {
     const youtubeSession = await this.resolveYoutubeSession(dto);
 
     if (profile.thumbnailMediaId) {
+      // Thumbnail lấy từ media storage nội bộ rồi upload trực tiếp lên YouTube.
       const thumbnailMedia = await this.mediaService.findById(
         profile.thumbnailMediaId,
       );
@@ -416,7 +417,7 @@ export class LivestreamService {
         livestream.googleAccountId,
         livestream.youtubeStreamId,
       );
-      // monitorStream đang tắt nên nhiều case YouTube không cho transition sang testing.
+      // Luồng hiện tại đi thẳng sang live sau khi stream active.
       await this.youtubeOrchestrator.transitionBroadcast(
         livestream.googleAccountId,
         livestream.youtubeBroadcastId,
@@ -441,6 +442,7 @@ export class LivestreamService {
   }
 
   private async resolveStartContext(dto: StartLivestreamDto) {
+    // Bước này chỉ xác thực dữ liệu đầu vào trước khi start.
     await this.googleAccountService.findById(dto.googleAccountId);
     const profile = await this.livestreamProfileService.findById(dto.profileId);
     if (!profile.videoMediaIds || profile.videoMediaIds.length === 0) {
@@ -465,6 +467,7 @@ export class LivestreamService {
       );
     }
 
+    // Mỗi lần start sẽ tạo broadcast + stream mới, không tái sử dụng broadcast cũ.
     return this.youtubeOrchestrator.createAndBindBroadcast(dto.googleAccountId, {
       title: profile.livestreamTitle,
       description: profile.livestreamDescription ?? undefined,

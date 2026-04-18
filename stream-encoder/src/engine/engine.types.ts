@@ -11,4 +11,8 @@ export type EncoderJobRow = {
   profile_id: string | null;
   current_video_index: number | null;
   current_media_id: string | null;
+  playlist_generation: number | null;
+  owner_node: string | null;
+  owner_epoch: number | null;
+  lease_until: string | null;
 };

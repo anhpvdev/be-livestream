@@ -8,6 +8,11 @@ import { pipeline } from 'node:stream/promises';
 import { Client } from 'pg';
 import { EncoderJobRow, EngineStatus } from './engine.types';
 
+type OwnershipState = {
+  isOwner: boolean;
+  ownerEpoch: number | null;
+};
+
 @Injectable()
 export class EngineService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EngineService.name);
@@ -17,7 +22,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private readonly prefetchEnabled: boolean;
   private readonly prefetchLogSkips: boolean;
   private readonly cacheDir: string;
-  private readonly playlistControllerNode: string;
+  private readonly ownerLeaseMs: number;
   private pg: Client;
 
   private pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -34,6 +39,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private currentSpeed = '0x';
   private currentLockKey: string | null = null;
   private stderrBuffer = '';
+  private processRunId = 0;
   private readonly mediaStorageKeyCache = new Map<string, string>();
   private readonly prefetchTasks = new Map<string, Promise<void>>();
 
@@ -45,10 +51,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     this.prefetchLogSkips =
       this.config.get<string>('ENGINE_PREFETCH_LOG_SKIPS', 'false') === 'true';
     this.cacheDir = this.config.get<string>('ENGINE_CACHE_DIR', '/tmp/encoder-cache');
-    this.playlistControllerNode = this.config.get<string>(
-      'ENGINE_PLAYLIST_CONTROLLER_NODE',
-      'primary',
-    );
+    this.ownerLeaseMs = this.config.get<number>('ENGINE_OWNER_LEASE_MS', 6000);
 
     this.pg = this.createPgClient();
   }
@@ -65,6 +68,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     await this.connectWithRetry();
+    await this.ensureOwnershipColumns();
     if (this.prefetchEnabled) {
       await mkdir(this.cacheDir, { recursive: true });
       this.logger.log(`Media prefetch enabled, cacheDir=${this.cacheDir}`);
@@ -125,7 +129,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
   private async pollOnce(): Promise<void> {
     const { rows } = await this.pg.query<EncoderJobRow>(
-      `SELECT livestream_id, desired_state, media_path, rtmp_url, backup_rtmp_url, stream_key, seek_to, profile_id, current_video_index, current_media_id
+      `SELECT livestream_id, desired_state, media_path, rtmp_url, backup_rtmp_url, stream_key, seek_to, profile_id, current_video_index, current_media_id, playlist_generation, owner_node, owner_epoch, lease_until
        FROM encoder_jobs
        WHERE desired_state = 'running'
        ORDER BY updated_at DESC
@@ -139,8 +143,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
     const job = rows[0];
     const dualIngest = !!job.backup_rtmp_url;
-    const isPlaylistController =
-      !dualIngest || this.nodeName === this.playlistControllerNode;
+    // Với dual ingest: luôn phải xác định node nào đang giữ quyền authority.
+    const ownership = await this.acquireOrRenewOwnership(job, dualIngest);
+    let isPlaylistController = !dualIngest || ownership.isOwner;
+    const ownerEpoch = ownership.ownerEpoch;
     const targetRtmpBase =
       this.nodeName === 'backup' ? job.backup_rtmp_url || job.rtmp_url : job.rtmp_url;
     if (!targetRtmpBase || !job.stream_key) return;
@@ -178,12 +184,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
           : 0;
       nextIndex = Math.max(0, nextIndex % profileMediaIds.length);
 
-      if (
-        isPlaylistController &&
-        this.currentLivestreamId === job.livestream_id &&
-        this.currentStatus === 'completed' &&
-        !this.currentProcess
-      ) {
+      // Chỉ authority mới được quyền "advance" playlist khi bài hiện tại đã phát xong.
+      if (this.shouldAdvancePlaylist(job.livestream_id, isPlaylistController)) {
         const currentIdx =
           this.currentMediaId && profileMediaIds.includes(this.currentMediaId)
             ? profileMediaIds.indexOf(this.currentMediaId)
@@ -194,19 +196,40 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Next media selected for livestream=${job.livestream_id}: index=${nextIndex}, mediaId=${targetMediaId}`,
         );
-        await this.pg.query(
-          'UPDATE encoder_jobs SET current_video_index = $1, current_media_id = $2 WHERE livestream_id = $3',
-          [nextIndex, targetMediaId, job.livestream_id],
+        const updated = await this.updatePlaylistCursor(
+          job.livestream_id,
+          nextIndex,
+          targetMediaId,
+          (job.playlist_generation ?? 0) + 1,
+          dualIngest,
+          ownerEpoch,
         );
+        if (!updated) {
+          // Mất quyền ghi cursor (fencing fail) -> fallback follower.
+          isPlaylistController = false;
+          targetMediaId = job.current_media_id;
+        }
       }
 
       if (!targetMediaId || !profileMediaIds.includes(targetMediaId)) {
         targetMediaId = profileMediaIds[nextIndex];
         if (isPlaylistController) {
-          await this.pg.query(
-            'UPDATE encoder_jobs SET current_video_index = $1, current_media_id = $2 WHERE livestream_id = $3',
-            [nextIndex, targetMediaId, job.livestream_id],
+          const updated = await this.updatePlaylistCursor(
+            job.livestream_id,
+            nextIndex,
+            targetMediaId,
+            (job.playlist_generation ?? 0) + 1,
+            dualIngest,
+            ownerEpoch,
           );
+          if (!updated) {
+            // Tránh split-brain: nếu không ghi được CAS thì không tự quyết định bài.
+            isPlaylistController = false;
+            if (!job.current_media_id) return;
+            targetMediaId = job.current_media_id;
+          }
+        } else if (!job.current_media_id) {
+          return;
         }
       }
       targetMediaIndex = profileMediaIds.indexOf(targetMediaId);
@@ -235,12 +258,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       this.currentOutputRtmpUrl !== targetRtmpBase;
 
     if (shouldRestart && targetMediaPath) {
-      const effectiveSeekTo =
-        this.currentLivestreamId === job.livestream_id &&
-        this.currentStatus === 'completed' &&
-        !this.currentProcess
-          ? '00:00:00.000'
-          : job.seek_to || '00:00:00.000';
+      const effectiveSeekTo = this.resolveSeekTo(job);
       this.startFfmpeg({
         mediaPath: targetMediaPath,
         mediaId: targetMediaId,
@@ -251,7 +269,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    await this.updateHeartbeat(isPlaylistController);
+    await this.updateHeartbeat(isPlaylistController, dualIngest, ownerEpoch);
   }
 
   private startFfmpeg(params: {
@@ -283,6 +301,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     );
 
     const proc = spawn(this.ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const runId = ++this.processRunId;
     this.logger.log(
       `Media start on node=${this.nodeName}, livestream=${params.livestreamId}, mediaId=${params.mediaId ?? 'unknown'}, seekTo=${params.seekTo}, output=${params.rtmpUrl}/${params.streamKey}`,
     );
@@ -303,6 +322,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     });
 
     proc.on('close', (code) => {
+      // Bỏ qua callback "close" cũ khi process đã bị thay bằng phiên mới.
+      if (this.currentProcess !== proc || runId !== this.processRunId) {
+        return;
+      }
       this.logger.log(
         `Media finished on node=${this.nodeName}, livestream=${params.livestreamId}, mediaId=${params.mediaId ?? 'unknown'}, exitCode=${code ?? 'null'}`,
       );
@@ -332,7 +355,11 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async updateHeartbeat(shouldUpdateMediaCursor: boolean): Promise<void> {
+  private async updateHeartbeat(
+    shouldUpdateMediaCursor: boolean,
+    dualIngest: boolean,
+    ownerEpoch: number | null,
+  ): Promise<void> {
     if (!this.currentLivestreamId) return;
     await this.pg.query(
       `UPDATE encoder_jobs
@@ -340,7 +367,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
            last_heartbeat_at = NOW(),
            current_timestamp_ms = $2,
            current_timestamp_str = $3,
-           current_media_id = CASE WHEN $6 THEN $4 ELSE current_media_id END
+           -- Chỉ authority hợp lệ mới được ghi đè current_media_id trong dual-ingest.
+           current_media_id = CASE
+             WHEN $6 AND (NOT $7 OR (owner_node = $1 AND owner_epoch = $8))
+             THEN $4
+             ELSE current_media_id
+           END
        WHERE livestream_id = $5`,
       [
         this.nodeName,
@@ -349,8 +381,130 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         this.currentMediaId,
         this.currentLivestreamId,
         shouldUpdateMediaCursor,
+        dualIngest,
+        ownerEpoch,
       ],
     );
+  }
+
+  private async acquireOrRenewOwnership(
+    job: EncoderJobRow,
+    dualIngest: boolean,
+  ): Promise<OwnershipState> {
+    if (!dualIngest) return { isOwner: true, ownerEpoch: null };
+    const livestreamId = job.livestream_id;
+    const result = await this.pg.query<{ owner_node: string; owner_epoch: number }>(
+      `UPDATE encoder_jobs
+       SET owner_node = $2,
+           owner_epoch = CASE
+             WHEN owner_node IS DISTINCT FROM $2 THEN COALESCE(owner_epoch, 0) + 1
+             ELSE COALESCE(owner_epoch, 1)
+           END,
+           lease_until = NOW() + ($3 || ' milliseconds')::interval
+       WHERE livestream_id = $1
+         AND (
+           owner_node = $2
+           OR owner_node IS NULL
+           OR lease_until IS NULL
+           OR lease_until < NOW()
+         )
+       RETURNING owner_node, owner_epoch`,
+      [
+        livestreamId,
+        this.nodeName,
+        this.ownerLeaseMs,
+      ],
+    );
+    if (result.rowCount && result.rows[0]) {
+      return {
+        isOwner: result.rows[0].owner_node === this.nodeName,
+        ownerEpoch: result.rows[0].owner_epoch ?? null,
+      };
+    }
+    return {
+      isOwner: job.owner_node === this.nodeName,
+      ownerEpoch: job.owner_epoch ?? null,
+    };
+  }
+
+  private async updatePlaylistCursor(
+    livestreamId: string,
+    nextIndex: number,
+    targetMediaId: string,
+    nextGeneration: number,
+    dualIngest: boolean,
+    ownerEpoch: number | null,
+  ): Promise<boolean> {
+    if (!dualIngest) {
+      await this.pg.query(
+        'UPDATE encoder_jobs SET current_video_index = $1, current_media_id = $2, playlist_generation = $3 WHERE livestream_id = $4',
+        [nextIndex, targetMediaId, nextGeneration, livestreamId],
+      );
+      return true;
+    }
+
+    // Dual ingest: CAS theo owner + epoch + generation để chặn ghi đè sai node.
+    const result = await this.pg.query(
+      `UPDATE encoder_jobs
+       SET current_video_index = $1, current_media_id = $2, playlist_generation = $3
+       WHERE livestream_id = $4
+         AND owner_node = $5
+         AND owner_epoch = $6
+         AND playlist_generation = $7`,
+      [
+        nextIndex,
+        targetMediaId,
+        nextGeneration,
+        livestreamId,
+        this.nodeName,
+        ownerEpoch,
+        nextGeneration - 1,
+      ],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async ensureOwnershipColumns(): Promise<void> {
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS owner_node varchar(32) NULL`,
+    );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS owner_epoch int NULL`,
+    );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS lease_until timestamptz NULL`,
+    );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS playlist_generation int NOT NULL DEFAULT 0`,
+    );
+  }
+
+  private shouldAdvancePlaylist(
+    livestreamId: string,
+    isPlaylistController: boolean,
+  ): boolean {
+    return (
+      isPlaylistController &&
+      this.currentLivestreamId === livestreamId &&
+      this.currentStatus === 'completed' &&
+      !this.currentProcess
+    );
+  }
+
+  private resolveSeekTo(job: EncoderJobRow): string {
+    // Khi vừa hoàn tất clip trước đó, clip kế tiếp luôn phát từ đầu.
+    if (
+      this.currentLivestreamId === job.livestream_id &&
+      this.currentStatus === 'completed' &&
+      !this.currentProcess
+    ) {
+      return '00:00:00.000';
+    }
+    return job.seek_to || '00:00:00.000';
   }
 
   private async loadProfileMediaIds(profileId: string): Promise<string[]> {

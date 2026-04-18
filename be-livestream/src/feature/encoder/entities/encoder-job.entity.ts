@@ -45,6 +45,9 @@ export class EncoderJob {
   @Column({ type: 'uuid', name: 'current_media_id', nullable: true })
   currentMediaId: string | null;
 
+  @Column({ type: 'int', name: 'playlist_generation', default: 0 })
+  playlistGeneration: number;
+
   @Column({ type: 'varchar', length: 16, name: 'active_node', nullable: true })
   activeNode: string | null;
 
@@ -61,6 +64,15 @@ export class EncoderJob {
 
   @Column({ type: 'timestamptz', name: 'last_heartbeat_at', nullable: true })
   lastHeartbeatAt: Date | null;
+
+  @Column({ type: 'varchar', length: 32, name: 'owner_node', nullable: true })
+  ownerNode: string | null;
+
+  @Column({ type: 'int', name: 'owner_epoch', nullable: true })
+  ownerEpoch: number | null;
+
+  @Column({ type: 'timestamptz', name: 'lease_until', nullable: true })
+  leaseUntil: Date | null;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;

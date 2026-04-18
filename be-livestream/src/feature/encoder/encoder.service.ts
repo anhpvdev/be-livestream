@@ -102,6 +102,9 @@ export class EncoderService {
     job.profileId = profileId;
     job.currentVideoIndex = 0;
     job.currentMediaId = payload.currentMediaId;
+    if (job.playlistGeneration === null || job.playlistGeneration === undefined) {
+      job.playlistGeneration = 0;
+    }
 
     await this.jobRepo.save(job);
   }
