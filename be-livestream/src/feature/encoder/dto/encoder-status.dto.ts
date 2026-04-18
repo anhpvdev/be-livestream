@@ -4,6 +4,28 @@ import {
   EncoderSessionStatus,
 } from '../entities/encoder-session.entity';
 
+export class EncoderHostMetricsDto {
+  @ApiPropertyOptional({
+    description: 'Load average (1/5/15 phút) từ VPS encoder, nếu stream-encoder báo cáo',
+  })
+  loadavg?: number[];
+
+  @ApiPropertyOptional({ description: 'RAM host còn trống (bytes)' })
+  freemem?: number;
+
+  @ApiPropertyOptional({ description: 'RAM host tổng (bytes)' })
+  totalmem?: number;
+
+  @ApiPropertyOptional({ description: 'RSS process encoder (MB)' })
+  process_rss_mb?: number;
+
+  @ApiPropertyOptional({
+    description: 'GPU: chưa có probe tự động thì null',
+    nullable: true,
+  })
+  gpu?: null | Record<string, unknown>;
+}
+
 export class EncoderHealthResponse {
   @ApiProperty()
   node: string;
@@ -28,6 +50,12 @@ export class EncoderHealthResponse {
 
   @ApiPropertyOptional()
   pid: number;
+
+  @ApiPropertyOptional()
+  livestreamId?: string | null;
+
+  @ApiPropertyOptional({ type: EncoderHostMetricsDto })
+  host?: EncoderHostMetricsDto;
 }
 
 export class EncoderSessionResponseDto {

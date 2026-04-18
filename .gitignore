@@ -1,4 +1,4 @@
-# --- Dependencies & build (be-livestream, stream-encoder, encoder-monitor) ---
+# --- Dependencies & build (be-livestream, stream-encoder) ---
 node_modules/
 
 # Compiled / Nest / TS

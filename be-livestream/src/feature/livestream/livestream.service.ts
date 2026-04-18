@@ -21,9 +21,10 @@ import { EncoderNode } from '../encoder/entities/encoder-session.entity';
 import { StartLivestreamDto } from './dto/start-livestream.dto';
 import { BroadcastSegmentService } from './broadcast-segment.service';
 import { LivestreamProfileService } from '../livestream-profile/livestream-profile.service';
-import { StartLivestreamAckDto } from './dto/livestream-response.dto';
+import { LivestreamStatusResponseDto, StartLivestreamAckDto } from './dto/livestream-response.dto';
 import { YouTubeLivestreamOrchestratorService } from '../youtube-api/youtube-livestream-orchestrator.service';
 import { EncoderJob } from '../encoder/entities/encoder-job.entity';
+import { EncoderVpsService } from '../encoder/encoder-vps.service';
 
 type LivestreamPreflightResult = {
   ok: boolean;
@@ -57,6 +58,7 @@ export class LivestreamService {
     private readonly encoderHealthService: EncoderHealthService,
     private readonly broadcastSegmentService: BroadcastSegmentService,
     private readonly livestreamProfileService: LivestreamProfileService,
+    private readonly encoderVpsService: EncoderVpsService,
   ) {}
 
   async startLivestream(
@@ -95,10 +97,20 @@ export class LivestreamService {
       );
     }
 
+    this.assertEncoderVpsPair(dto);
+    if (dto.primaryEncoderVpsId && dto.backupEncoderVpsId) {
+      await this.encoderVpsService.assertUsablePair(
+        dto.primaryEncoderVpsId,
+        dto.backupEncoderVpsId,
+      );
+    }
+
     const livestream = this.livestreamRepo.create({
       googleAccountId: dto.googleAccountId,
       mediaFileId: media.id,
       profileId: dto.profileId,
+      primaryEncoderVpsId: dto.primaryEncoderVpsId ?? null,
+      backupEncoderVpsId: dto.backupEncoderVpsId ?? null,
       title: profile.livestreamTitle || profile.name,
       description: profile.livestreamDescription || profile.description,
       youtubeBroadcastId: youtubeSession.broadcastId,
@@ -177,10 +189,47 @@ export class LivestreamService {
       };
     }
 
-    const [primaryHealth, backupHealth] = await Promise.all([
-      this.encoderService.getHealth(EncoderNode.PRIMARY),
-      this.encoderService.getHealth(EncoderNode.BACKUP),
-    ]);
+    try {
+      this.assertEncoderVpsPair(dto);
+    } catch (error) {
+      return {
+        ok: false,
+        checks,
+        message: error.message ?? 'Invalid encoder VPS selection',
+      };
+    }
+
+    const useVpsPool =
+      !!dto.primaryEncoderVpsId && !!dto.backupEncoderVpsId;
+
+    let primaryHealth;
+    let backupHealth;
+    if (useVpsPool) {
+      await this.encoderVpsService.assertUsablePair(
+        dto.primaryEncoderVpsId,
+        dto.backupEncoderVpsId,
+      );
+      const [pu, bu] = await Promise.all([
+        this.encoderVpsService.getResolvedBaseUrl(dto.primaryEncoderVpsId),
+        this.encoderVpsService.getResolvedBaseUrl(dto.backupEncoderVpsId),
+      ]);
+      if (!pu || !bu) {
+        return {
+          ok: false,
+          checks,
+          message: 'Không resolve được base URL cho một trong hai VPS encoder.',
+        };
+      }
+      [primaryHealth, backupHealth] = await Promise.all([
+        this.encoderService.getHealthAtUrl(pu),
+        this.encoderService.getHealthAtUrl(bu),
+      ]);
+    } else {
+      [primaryHealth, backupHealth] = await Promise.all([
+        this.encoderService.getHealth(EncoderNode.PRIMARY),
+        this.encoderService.getHealth(EncoderNode.BACKUP),
+      ]);
+    }
 
     checks.encoderPrimaryReachable = !!primaryHealth;
     checks.encoderBackupReachable = !!backupHealth;
@@ -189,15 +238,37 @@ export class LivestreamService {
       return {
         ok: false,
         checks,
-        message:
-          'Encoder health check failed. Verify ENCODER_PRIMARY_URL/ENCODER_BACKUP_URL and docker ports.',
+        message: useVpsPool
+          ? 'Encoder health check failed trên một hoặc hai VPS đã chọn. Kiểm tra baseUrl và port stream-encoder.'
+          : 'Encoder health check failed. Verify ENCODER_PRIMARY_URL/ENCODER_BACKUP_URL and docker ports.',
       };
     }
 
-    const [primaryProbe, backupProbe] = await Promise.all([
-      this.encoderService.probeMediaWithFfmpeg(EncoderNode.PRIMARY, mediaPath),
-      this.encoderService.probeMediaWithFfmpeg(EncoderNode.BACKUP, mediaPath),
-    ]);
+    const [primaryProbe, backupProbe] = useVpsPool
+      ? await Promise.all([
+          this.encoderService.probeMediaWithFfmpegAtUrl(
+            (await this.encoderVpsService.getResolvedBaseUrl(
+              dto.primaryEncoderVpsId!,
+            ))!,
+            mediaPath,
+          ),
+          this.encoderService.probeMediaWithFfmpegAtUrl(
+            (await this.encoderVpsService.getResolvedBaseUrl(
+              dto.backupEncoderVpsId!,
+            ))!,
+            mediaPath,
+          ),
+        ])
+      : await Promise.all([
+          this.encoderService.probeMediaWithFfmpeg(
+            EncoderNode.PRIMARY,
+            mediaPath,
+          ),
+          this.encoderService.probeMediaWithFfmpeg(
+            EncoderNode.BACKUP,
+            mediaPath,
+          ),
+        ]);
     checks.encoderPrimaryFfmpegProbe = primaryProbe;
     checks.encoderBackupFfmpegProbe = backupProbe;
 
@@ -293,7 +364,7 @@ export class LivestreamService {
     return livestream;
   }
 
-  async getStatus(id: string) {
+  async getStatus(id: string): Promise<LivestreamStatusResponseDto> {
     const livestream = await this.findById(id);
 
     const activeSession = await this.encoderService.getActiveSession(id);
@@ -326,6 +397,29 @@ export class LivestreamService {
     const playbackMediaId =
       encoderJob?.currentMediaId ?? livestream.mediaFileId ?? null;
 
+    const [primaryHealth, backupHealth] = await Promise.all([
+      this.encoderService.getHealth(EncoderNode.PRIMARY, id),
+      this.encoderService.getHealth(EncoderNode.BACKUP, id),
+    ]);
+    const playlistAuthorityNode = encoderJob?.activeNode ?? null;
+    const isPrimaryAuthority =
+      !!playlistAuthorityNode && playlistAuthorityNode === (primaryHealth?.node ?? null);
+    const isBackupAuthority =
+      !!playlistAuthorityNode && playlistAuthorityNode === (backupHealth?.node ?? null);
+
+    const [primaryVpsRow, backupVpsRow] = await Promise.all([
+      livestream.primaryEncoderVpsId
+        ? this.encoderVpsService.findById(livestream.primaryEncoderVpsId)
+        : Promise.resolve(null),
+      livestream.backupEncoderVpsId
+        ? this.encoderVpsService.findById(livestream.backupEncoderVpsId)
+        : Promise.resolve(null),
+    ]);
+    const primaryUrlSource: 'vps' | 'env' =
+      livestream.primaryEncoderVpsId ? 'vps' : 'env';
+    const backupUrlSource: 'vps' | 'env' =
+      livestream.backupEncoderVpsId ? 'vps' : 'env';
+
     return {
       ...this.toResponse({ ...livestream, mediaFileId: playbackMediaId }),
       progress: progress
@@ -355,6 +449,33 @@ export class LivestreamService {
       encoderJobActiveNode: encoderJob?.activeNode ?? null,
       encoderCurrentMediaId: encoderJob?.currentMediaId ?? null,
       encoderCurrentVideoIndex: encoderJob?.currentVideoIndex ?? null,
+      encoderNodes: {
+        primary: {
+          encoderVpsId: livestream.primaryEncoderVpsId,
+          vpsName: primaryVpsRow?.name ?? null,
+          vpsBaseUrl: primaryVpsRow?.baseUrl ?? null,
+          resolvedBaseUrl:
+            livestream.primaryEncoderVpsId ? (primaryVpsRow?.baseUrl ?? null) : null,
+          vpsEnabled: primaryVpsRow?.enabled ?? null,
+          vpsLastSeenAt: primaryVpsRow?.lastSeenAt ?? null,
+          urlSource: primaryUrlSource,
+          health: primaryHealth ?? null,
+          isPlaylistAuthority: isPrimaryAuthority,
+        },
+        backup: {
+          encoderVpsId: livestream.backupEncoderVpsId,
+          vpsName: backupVpsRow?.name ?? null,
+          vpsBaseUrl: backupVpsRow?.baseUrl ?? null,
+          resolvedBaseUrl:
+            livestream.backupEncoderVpsId ? (backupVpsRow?.baseUrl ?? null) : null,
+          vpsEnabled: backupVpsRow?.enabled ?? null,
+          vpsLastSeenAt: backupVpsRow?.lastSeenAt ?? null,
+          urlSource: backupUrlSource,
+          health: backupHealth ?? null,
+          isPlaylistAuthority: isBackupAuthority,
+        },
+        playlistAuthorityNode,
+      },
     };
   }
 
@@ -383,6 +504,8 @@ export class LivestreamService {
       googleAccountId: ls.googleAccountId,
       currentMediaId: ls.mediaFileId,
       profileId: ls.profileId,
+      primaryEncoderVpsId: ls.primaryEncoderVpsId,
+      backupEncoderVpsId: ls.backupEncoderVpsId,
       currentSegmentId: ls.currentSegmentId,
       title: ls.title,
       description: ls.description,
@@ -456,6 +579,21 @@ export class LivestreamService {
     }
 
     return { profile, media };
+  }
+
+  private assertEncoderVpsPair(dto: StartLivestreamDto): void {
+    const a = dto.primaryEncoderVpsId;
+    const b = dto.backupEncoderVpsId;
+    if ((a && !b) || (!a && b)) {
+      throw new BadRequestException(
+        'Cần truyền đủ primaryEncoderVpsId và backupEncoderVpsId, hoặc bỏ cả hai để dùng URL encoder từ biến môi trường.',
+      );
+    }
+    if (a && b && a === b) {
+      throw new BadRequestException(
+        'primaryEncoderVpsId và backupEncoderVpsId phải là hai VPS khác nhau.',
+      );
+    }
   }
 
   private async resolveYoutubeSession(dto: StartLivestreamDto) {

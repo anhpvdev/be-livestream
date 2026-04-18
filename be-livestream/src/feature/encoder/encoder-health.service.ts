@@ -104,7 +104,10 @@ export class EncoderHealthService implements OnModuleDestroy {
     livestreamId: string,
     monitor: MonitoredStream,
   ): Promise<void> {
-    const health = await this.encoderService.getHealth(monitor.currentNode);
+    const health = await this.encoderService.getHealth(
+      monitor.currentNode,
+      livestreamId,
+    );
     const inGracePeriod = Date.now() < monitor.graceUntilMs;
 
     if (!health || health.status !== 'running') {
@@ -118,7 +121,10 @@ export class EncoderHealthService implements OnModuleDestroy {
 
       if (monitor.missCount >= this.failoverThreshold) {
         const backupNode = this.getBackupNode(monitor.currentNode);
-        const backupHealth = await this.encoderService.getHealth(backupNode);
+        const backupHealth = await this.encoderService.getHealth(
+          backupNode,
+          livestreamId,
+        );
         if (backupHealth?.status === 'running') {
           this.logger.warn(
             `Primary node missed nhưng backup [${backupNode}] đang RUNNING, chuyển monitor sang backup`,

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { validateEnv } from './config/env.schema';
+import { BackendRegisterService } from './backend-register.service';
+import { EngineIdentityService } from './engine/engine-identity.service';
 import { EngineService } from './engine/engine.service';
 import { HealthController } from './health.controller';
 
@@ -12,6 +14,6 @@ import { HealthController } from './health.controller';
     }),
   ],
   controllers: [HealthController],
-  providers: [EngineService],
+  providers: [EngineIdentityService, EngineService, BackendRegisterService],
 })
 export class AppModule {}

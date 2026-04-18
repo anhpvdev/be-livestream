@@ -48,7 +48,7 @@ export class EncoderJob {
   @Column({ type: 'int', name: 'playlist_generation', default: 0 })
   playlistGeneration: number;
 
-  @Column({ type: 'varchar', length: 16, name: 'active_node', nullable: true })
+  @Column({ type: 'varchar', length: 128, name: 'active_node', nullable: true })
   activeNode: string | null;
 
   @Column({ type: 'bigint', name: 'current_timestamp_ms', nullable: true })
@@ -65,7 +65,7 @@ export class EncoderJob {
   @Column({ type: 'timestamptz', name: 'last_heartbeat_at', nullable: true })
   lastHeartbeatAt: Date | null;
 
-  @Column({ type: 'varchar', length: 32, name: 'owner_node', nullable: true })
+  @Column({ type: 'varchar', length: 128, name: 'owner_node', nullable: true })
   ownerNode: string | null;
 
   @Column({ type: 'int', name: 'owner_epoch', nullable: true })

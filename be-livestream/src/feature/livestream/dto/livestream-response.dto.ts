@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LivestreamStatus, PrivacyStatus } from '../entities/livestream.entity';
+import { EncoderHealthResponse } from '../../encoder/dto/encoder-status.dto';
 
 export class LivestreamResponseDto {
   @ApiProperty()
@@ -80,6 +81,49 @@ export class LivestreamProgressSnapshotDto {
   encoderSessionId: string;
 }
 
+export class LivestreamEncoderNodeStatusDto {
+  @ApiPropertyOptional({ nullable: true })
+  encoderVpsId: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  vpsName: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  vpsBaseUrl: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  resolvedBaseUrl: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  vpsEnabled: boolean | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  vpsLastSeenAt: Date | null;
+
+  @ApiProperty({ description: 'Nguồn URL encoder đang dùng: vps hoặc env' })
+  urlSource: 'vps' | 'env';
+
+  @ApiPropertyOptional({ nullable: true, type: EncoderHealthResponse })
+  health: EncoderHealthResponse | null;
+
+  @ApiProperty()
+  isPlaylistAuthority: boolean;
+}
+
+export class LivestreamEncoderNodesDto {
+  @ApiProperty({ type: LivestreamEncoderNodeStatusDto })
+  primary: LivestreamEncoderNodeStatusDto;
+
+  @ApiProperty({ type: LivestreamEncoderNodeStatusDto })
+  backup: LivestreamEncoderNodeStatusDto;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Node đang giữ quyền điều phối playlist trong encoder_jobs',
+  })
+  playlistAuthorityNode: string | null;
+}
+
 export class LivestreamStatusResponseDto extends LivestreamResponseDto {
   @ApiPropertyOptional({
     nullable: true,
@@ -124,6 +168,12 @@ export class LivestreamStatusResponseDto extends LivestreamResponseDto {
     description: 'current_video_index trong encoder_jobs',
   })
   encoderCurrentVideoIndex: number | null;
+
+  @ApiProperty({
+    type: LivestreamEncoderNodesDto,
+    description: 'Thông số VPS + health hiện tại của encoder primary/backup',
+  })
+  encoderNodes: LivestreamEncoderNodesDto;
 }
 
 export class StartLivestreamAckDto {

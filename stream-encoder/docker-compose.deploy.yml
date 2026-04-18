@@ -1,0 +1,35 @@
+services:
+  encoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: ${ENCODER_NODE_ID:-encoder-node}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 8080
+      ENGINE_DB_POLL_MS: ${ENGINE_DB_POLL_MS:-2000}
+      ENGINE_FFMPEG_BIN: ${ENGINE_FFMPEG_BIN:-ffmpeg}
+      ENGINE_PREFETCH_ENABLED: ${ENGINE_PREFETCH_ENABLED:-true}
+      ENGINE_PREFETCH_LOG_SKIPS: ${ENGINE_PREFETCH_LOG_SKIPS:-false}
+      ENGINE_CACHE_DIR: ${ENGINE_CACHE_DIR:-/tmp/encoder-cache}
+      ENGINE_OWNER_LEASE_MS: ${ENGINE_OWNER_LEASE_MS:-6000}
+      POSTGRES_HOST: ${POSTGRES_HOST:-host.docker.internal}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5433}
+      POSTGRES_DB: ${POSTGRES_DB:-Backend_HGM}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      BACKEND_ENCODER_VPS_REGISTER_URL: ${BACKEND_ENCODER_VPS_REGISTER_URL:-}
+      BACKEND_ENCODER_VPS_REGISTER_SECRET: ${BACKEND_ENCODER_VPS_REGISTER_SECRET:-}
+      BACKEND_ENCODER_VPS_HEARTBEAT_MS: ${BACKEND_ENCODER_VPS_HEARTBEAT_MS:-15000}
+      ENCODER_PUBLIC_BASE_URL: ${ENCODER_PUBLIC_BASE_URL:-}
+      ENCODER_VPS_DISPLAY_NAME: ${ENCODER_VPS_DISPLAY_NAME:-}
+    volumes:
+      - ${MEDIA_MOUNT_PATH:-../be-livestream/media}:/data/media:ro
+    ports:
+      - "${HOST_PORT:-8081}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

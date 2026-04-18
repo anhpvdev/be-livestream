@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn, ChildProcess } from 'node:child_process';
@@ -6,6 +7,7 @@ import { access, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Client } from 'pg';
+import { EngineIdentityService } from './engine-identity.service';
 import { EncoderJobRow, EngineStatus } from './engine.types';
 
 type OwnershipState = {
@@ -38,13 +40,19 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private currentBitrate = '0kbits/s';
   private currentSpeed = '0x';
   private currentLockKey: string | null = null;
+  private currentBackupLockKey: string | null = null;
   private stderrBuffer = '';
   private processRunId = 0;
   private readonly mediaStorageKeyCache = new Map<string, string>();
   private readonly prefetchTasks = new Map<string, Promise<void>>();
+  /** mediaId đã xác nhận có file cache hoàn chỉnh (tránh gọi pipeline copy lại khi loop / poll lặp). */
+  private readonly mediaCacheCompleteIds = new Set<string>();
 
-  constructor(private readonly config: ConfigService) {
-    this.nodeName = this.config.get<string>('ENGINE_NODE', 'primary');
+  constructor(
+    private readonly config: ConfigService,
+    identity: EngineIdentityService,
+  ) {
+    this.nodeName = identity.nodeId;
     this.pollMs = this.config.get<number>('ENGINE_DB_POLL_MS', 2000);
     this.ffmpegBin = this.config.get<string>('ENGINE_FFMPEG_BIN', 'ffmpeg');
     this.prefetchEnabled = this.config.get<string>('ENGINE_PREFETCH_ENABLED', 'true') === 'true';
@@ -84,6 +92,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   }
 
   getHealth() {
+    const mem = process.memoryUsage();
     return {
       node: this.nodeName,
       status: this.currentStatus,
@@ -94,6 +103,13 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       bitrate: this.currentBitrate,
       speed: this.currentSpeed,
       pid: this.currentProcess?.pid ?? null,
+      host: {
+        loadavg: os.loadavg(),
+        freemem: os.freemem(),
+        totalmem: os.totalmem(),
+        process_rss_mb: Math.round(mem.rss / 1024 / 1024),
+        gpu: null as null,
+      },
     };
   }
 
@@ -147,9 +163,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     const ownership = await this.acquireOrRenewOwnership(job, dualIngest);
     let isPlaylistController = !dualIngest || ownership.isOwner;
     const ownerEpoch = ownership.ownerEpoch;
-    const targetRtmpBase =
-      this.nodeName === 'backup' ? job.backup_rtmp_url || job.rtmp_url : job.rtmp_url;
-    if (!targetRtmpBase || !job.stream_key) return;
+    let targetRtmpBase = job.rtmp_url;
+    if (!job.stream_key) return;
 
     if (!dualIngest) {
       const lockKey = this.uuidToLockKey(job.livestream_id);
@@ -164,10 +179,44 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       this.currentLockKey = lockKey;
-    } else if (this.currentLockKey) {
-      await this.pg.query('SELECT pg_advisory_unlock($1::bigint)', [this.currentLockKey]).catch(() => undefined);
-      this.currentLockKey = null;
+      if (this.currentBackupLockKey) {
+        await this.pg
+          .query('SELECT pg_advisory_unlock($1::bigint)', [this.currentBackupLockKey])
+          .catch(() => undefined);
+        this.currentBackupLockKey = null;
+      }
+    } else {
+      if (this.currentLockKey) {
+        await this.pg
+          .query('SELECT pg_advisory_unlock($1::bigint)', [this.currentLockKey])
+          .catch(() => undefined);
+        this.currentLockKey = null;
+      }
+      if (ownership.isOwner) {
+        targetRtmpBase = job.rtmp_url;
+        if (this.currentBackupLockKey) {
+          await this.pg
+            .query('SELECT pg_advisory_unlock($1::bigint)', [this.currentBackupLockKey])
+            .catch(() => undefined);
+          this.currentBackupLockKey = null;
+        }
+      } else {
+        const backupLockKey = this.uuidToLockKey(`${job.livestream_id}:backup`);
+        const backupLockResult = await this.pg.query<{ locked: boolean }>(
+          'SELECT pg_try_advisory_lock($1::bigint) AS locked',
+          [backupLockKey],
+        );
+        if (!backupLockResult.rows[0]?.locked) {
+          if (this.currentLivestreamId === job.livestream_id && this.currentProcess) {
+            await this.stopFfmpeg('standby');
+          }
+          return;
+        }
+        this.currentBackupLockKey = backupLockKey;
+        targetRtmpBase = job.backup_rtmp_url || job.rtmp_url;
+      }
     }
+    if (!targetRtmpBase) return;
 
     let targetMediaPath = job.media_path;
     let targetMediaId = job.current_media_id;
@@ -184,30 +233,41 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
           : 0;
       nextIndex = Math.max(0, nextIndex % profileMediaIds.length);
 
-      // Chỉ authority mới được quyền "advance" playlist khi bài hiện tại đã phát xong.
+      // Chỉ authority mới được quyền "advance" playlist khi bài hiện tại đã phát xong (exit 0, không còn process).
+      // Bài kế phải đủ điều kiện phát (cache xong nếu bật prefetch) — nếu chưa thì loop bài hiện tại, không CAS sang bài sau.
       if (this.shouldAdvancePlaylist(job.livestream_id, isPlaylistController)) {
         const currentIdx =
           this.currentMediaId && profileMediaIds.includes(this.currentMediaId)
             ? profileMediaIds.indexOf(this.currentMediaId)
             : profileMediaIds.indexOf(job.current_media_id || '');
         const base = currentIdx >= 0 ? currentIdx : nextIndex;
-        nextIndex = (base + 1) % profileMediaIds.length;
-        targetMediaId = profileMediaIds[nextIndex];
-        this.logger.log(
-          `Next media selected for livestream=${job.livestream_id}: index=${nextIndex}, mediaId=${targetMediaId}`,
-        );
-        const updated = await this.updatePlaylistCursor(
-          job.livestream_id,
-          nextIndex,
-          targetMediaId,
-          (job.playlist_generation ?? 0) + 1,
-          dualIngest,
-          ownerEpoch,
-        );
-        if (!updated) {
-          // Mất quyền ghi cursor (fencing fail) -> fallback follower.
-          isPlaylistController = false;
-          targetMediaId = job.current_media_id;
+        const candidateNextIndex = (base + 1) % profileMediaIds.length;
+        const candidateNextId = profileMediaIds[candidateNextIndex];
+        const nextReady = await this.isMediaPlaybackReady(candidateNextId);
+        if (!nextReady) {
+          this.logger.warn(
+            `Bài kế chưa sẵn sàng để phát (chờ prefetch/cache), giữ bài hiện tại — livestream=${job.livestream_id}, nextMediaId=${candidateNextId}`,
+          );
+          void this.prefetchMedia(candidateNextId);
+        } else {
+          nextIndex = candidateNextIndex;
+          targetMediaId = candidateNextId;
+          this.logger.log(
+            `Next media selected for livestream=${job.livestream_id}: index=${nextIndex}, mediaId=${targetMediaId}`,
+          );
+          const updated = await this.updatePlaylistCursor(
+            job.livestream_id,
+            nextIndex,
+            targetMediaId,
+            (job.playlist_generation ?? 0) + 1,
+            dualIngest,
+            ownerEpoch,
+          );
+          if (!updated) {
+            // Mất quyền ghi cursor (fencing fail) -> fallback follower.
+            isPlaylistController = false;
+            targetMediaId = job.current_media_id;
+          }
         }
       }
 
@@ -246,7 +306,17 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         this.cleanupStaleCache(keepMediaIds);
       }
 
-      const localPath = await this.ensureMediaLocalPath(targetMediaId);
+      let localPath = await this.ensureMediaLocalPath(targetMediaId);
+      // Giữ cố định đường dẫn input trong suốt một phiên ffmpeg (tránh đổi source -> cache làm restart giữa bài).
+      if (
+        this.currentProcess &&
+        this.currentLivestreamId === job.livestream_id &&
+        targetMediaId &&
+        this.currentMediaId === targetMediaId &&
+        this.currentMediaPath
+      ) {
+        localPath = this.currentMediaPath;
+      }
       targetMediaPath = localPath;
     }
 
@@ -353,6 +423,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       await this.pg.query('SELECT pg_advisory_unlock($1::bigint)', [this.currentLockKey]).catch(() => undefined);
       this.currentLockKey = null;
     }
+    if (this.currentBackupLockKey) {
+      await this.pg.query('SELECT pg_advisory_unlock($1::bigint)', [this.currentBackupLockKey]).catch(() => undefined);
+      this.currentBackupLockKey = null;
+    }
   }
 
   private async updateHeartbeat(
@@ -369,7 +443,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
            current_timestamp_str = $3,
            -- Chỉ authority hợp lệ mới được ghi đè current_media_id trong dual-ingest.
            current_media_id = CASE
-             WHEN $6 AND (NOT $7 OR (owner_node = $1 AND owner_epoch = $8))
+             WHEN $6 AND (NOT $7 OR (owner_node::text = $9 AND owner_epoch = $8))
              THEN $4
              ELSE current_media_id
            END
@@ -383,6 +457,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         shouldUpdateMediaCursor,
         dualIngest,
         ownerEpoch,
+        this.nodeName,
       ],
     );
   }
@@ -467,7 +542,15 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private async ensureOwnershipColumns(): Promise<void> {
     await this.pg.query(
       `ALTER TABLE encoder_jobs
-         ADD COLUMN IF NOT EXISTS owner_node varchar(32) NULL`,
+         ALTER COLUMN active_node TYPE varchar(128)`,
+    );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ADD COLUMN IF NOT EXISTS owner_node varchar(128) NULL`,
+    );
+    await this.pg.query(
+      `ALTER TABLE encoder_jobs
+         ALTER COLUMN owner_node TYPE varchar(128)`,
     );
     await this.pg.query(
       `ALTER TABLE encoder_jobs
@@ -549,10 +632,49 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     const sourcePath = `/data/media/${storageKey}`;
     if (!this.prefetchEnabled) return sourcePath;
 
-    const cachePath = this.getCachePath(mediaId, storageKey);
-    if (await this.isFileReady(cachePath)) return cachePath;
+    if (await this.isMediaDownloadedToCache(mediaId, storageKey)) {
+      return this.getCachePath(mediaId, storageKey);
+    }
     void this.prefetchMedia(mediaId);
     return sourcePath;
+  }
+
+  /**
+   * Kiểm tra bài đã có bản copy đầy đủ trong cache chưa (loop lần 2 → chỉ đọc file có sẵn, không copy lại).
+   * Luôn verify bằng stat trên đĩa; nếu file mất thì gỡ khỏi Set để lần sau prefetch lại được.
+   */
+  private async isMediaDownloadedToCache(
+    mediaId: string,
+    storageKeyHint?: string | null,
+  ): Promise<boolean> {
+    if (!this.prefetchEnabled) return false;
+    const storageKey = storageKeyHint ?? (await this.loadMediaStorageKey(mediaId));
+    if (!storageKey) {
+      this.mediaCacheCompleteIds.delete(mediaId);
+      return false;
+    }
+    const cachePath = this.getCachePath(mediaId, storageKey);
+    const ok = await this.isFileReady(cachePath);
+    if (ok) {
+      this.mediaCacheCompleteIds.add(mediaId);
+    } else {
+      this.mediaCacheCompleteIds.delete(mediaId);
+    }
+    return ok;
+  }
+
+  /**
+   * Điều kiện "được phép mở bài" khi chuyển playlist:
+   * - Prefetch tắt: file nguồn trên volume phải tồn tại và size > 0.
+   * - Prefetch bật: chỉ coi là sẵn sàng khi bản copy cache đã hoàn tất (tránh bài 2 tải dở đã chèn vào luồng).
+   */
+  private async isMediaPlaybackReady(mediaId: string): Promise<boolean> {
+    if (this.prefetchEnabled) {
+      return this.isMediaDownloadedToCache(mediaId);
+    }
+    const storageKey = await this.loadMediaStorageKey(mediaId);
+    if (!storageKey) return false;
+    return this.isFileReady(`/data/media/${storageKey}`);
   }
 
   private prefetchMedia(mediaId: string): Promise<void> {
@@ -571,9 +693,9 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     if (!storageKey) return;
     const sourcePath = `/data/media/${storageKey}`;
     const targetPath = this.getCachePath(mediaId, storageKey);
-    if (await this.isFileReady(targetPath)) {
+    if (await this.isMediaDownloadedToCache(mediaId, storageKey)) {
       if (this.prefetchLogSkips) {
-        this.logger.log(`Prefetch skip (already cached): mediaId=${mediaId}`);
+        this.logger.log(`Prefetch skip (đã có cache trên đĩa): mediaId=${mediaId}`);
       }
       return;
     }
@@ -583,9 +705,11 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       await pipeline(createReadStream(sourcePath), createWriteStream(tempPath));
       await rm(targetPath, { force: true });
       await this.renameSafe(tempPath, targetPath);
+      this.mediaCacheCompleteIds.add(mediaId);
       this.logger.log(`Prefetch done: mediaId=${mediaId}`);
     } catch (error) {
       await rm(tempPath, { force: true }).catch(() => undefined);
+      this.mediaCacheCompleteIds.delete(mediaId);
       this.logger.warn(
         `Prefetch failed mediaId=${mediaId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -602,6 +726,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       if (!name.includes('__')) continue;
       const isKeep = Array.from(keepPrefixes).some((prefix) => name.startsWith(prefix));
       if (isKeep) continue;
+      const sep = name.indexOf('__');
+      if (sep > 0) {
+        this.mediaCacheCompleteIds.delete(name.slice(0, sep));
+      }
       await rm(join(this.cacheDir, name), { force: true }).catch(() => undefined);
     }
     for (const mediaId of Array.from(this.mediaStorageKeyCache.keys())) {
@@ -657,7 +785,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   }
 
   private uuidToLockKey(uuid: string): string {
-    const hex = uuid.replace(/-/g, '').slice(0, 16);
+    const normalized = uuid.replace(/[^a-zA-Z0-9]/g, '');
+    const hexBase =
+      normalized.length > 0
+        ? Buffer.from(normalized).toString('hex')
+        : Buffer.from('lock').toString('hex');
+    const hex = hexBase.slice(0, 16).padEnd(16, '0');
     const value = BigInt(`0x${hex}`);
     return BigInt.asIntN(63, value).toString();
   }

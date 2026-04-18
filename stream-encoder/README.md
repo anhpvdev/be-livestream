@@ -29,9 +29,38 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Compose này chạy 2 node:
-- `encoder-primary` tại `http://localhost:8081`
-- `encoder-backup` tại `http://localhost:8082`
+Compose chạy đồng thời 3 container (`node-1` … `node-3`), mỗi cổng:
+- `http://localhost:8081`
+- `http://localhost:8082`
+- `http://localhost:8083`
+
+## Deploy nhanh 1 encoder theo port
+
+Chạy 1 container stream-encoder với port tùy ý:
+
+```bash
+npm run deploy -- 5000
+```
+
+Hoặc script tắt theo port cố định:
+
+```bash
+npm run 5000
+```
+
+Bạn cũng có thể dùng script shell:
+
+```bash
+./deploy.sh 5000
+```
+
+Mỗi port sẽ có project compose riêng (`stream-encoder-<port>`), nên có thể chạy nhiều node song song.
+
+### Định danh và vai trò node
+
+- Mỗi container có `hostname` riêng (`encoder-node-1` …). Process dùng `HOSTNAME` làm định danh runtime (lease/heartbeat, webhook đăng ký VPS).
+- Vai trò main/backup là runtime theo từng livestream: node owner đẩy URL primary, một follower giữ lock backup đẩy URL backup.
+- Không cần cấu hình role cố định trong env.
 
 ## Yêu cầu trước khi chạy
 

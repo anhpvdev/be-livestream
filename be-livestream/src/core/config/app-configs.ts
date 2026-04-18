@@ -29,10 +29,12 @@ export const appConfigs = z
 
     ENCODER_PRIMARY_URL: z.string().url().default('http://localhost:8080'),
     ENCODER_BACKUP_URL: z.string().url().default('http://localhost:8081'),
-    ENCODER_MONITOR_URL: z.string().url().default('http://localhost:8090'),
     ENCODER_HEALTH_INTERVAL_MS: z.coerce.number().int().default(3000),
     ENCODER_HEALTH_TIMEOUT_MS: z.coerce.number().int().default(10000),
     ENCODER_FAILOVER_THRESHOLD: z.coerce.number().int().default(3),
+
+    /** Shared secret cho webhook đăng ký VPS encoder (Bearer token). Để trống = tắt webhook (503). */
+    ENCODER_VPS_WEBHOOK_SECRET: z.string().optional().default(''),
 
     MEDIA_MAX_FILE_SIZE: z.coerce.number().int().default(10737418240),
   })

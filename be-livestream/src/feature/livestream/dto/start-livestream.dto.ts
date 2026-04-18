@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsUUID, ValidateIf } from 'class-validator';
 
 export class StartLivestreamDto {
   @ApiProperty({
@@ -15,4 +15,22 @@ export class StartLivestreamDto {
   })
   @IsUUID()
   profileId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'UUID VPS encoder main (stream-ENGINE_NODE=primary). Bỏ trống cả hai VPS thì dùng ENCODER_PRIMARY_URL / ENCODER_BACKUP_URL từ env.',
+  })
+  @ValidateIf((o: StartLivestreamDto) => !!o.backupEncoderVpsId)
+  @IsUUID()
+  @IsOptional()
+  primaryEncoderVpsId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'UUID VPS encoder backup (ENGINE_NODE=backup). Phải cùng truyền với primary nếu dùng pool VPS.',
+  })
+  @ValidateIf((o: StartLivestreamDto) => !!o.primaryEncoderVpsId)
+  @IsUUID()
+  @IsOptional()
+  backupEncoderVpsId?: string;
 }

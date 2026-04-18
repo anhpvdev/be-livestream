@@ -12,6 +12,7 @@ import { Livestream } from '../livestream/entities/livestream.entity';
 import { MediaFile } from '../media/entities/media.entity';
 import { AppEnv } from '@/core/config/app-configs';
 import { EncoderHealthResponse } from './dto/encoder-status.dto';
+import { EncoderVpsService } from './encoder-vps.service';
 
 @Injectable()
 export class EncoderService {
@@ -24,6 +25,9 @@ export class EncoderService {
     private readonly sessionRepo: Repository<EncoderSession>,
     @InjectRepository(EncoderJob)
     private readonly jobRepo: Repository<EncoderJob>,
+    @InjectRepository(Livestream)
+    private readonly livestreamRepo: Repository<Livestream>,
+    private readonly encoderVpsService: EncoderVpsService,
     private readonly configService: ConfigService<AppEnv>,
   ) {
     this.primaryUrl = this.configService.get('ENCODER_PRIMARY_URL');
@@ -65,9 +69,20 @@ export class EncoderService {
 
   async stopEncoder(livestreamId: string): Promise<void> {
     await this.enqueueStopJob(livestreamId);
+    const livestream = await this.livestreamRepo.findOne({
+      where: { id: livestreamId },
+    });
+    const primaryUrl = await this.resolveEncoderControlUrl(
+      EncoderNode.PRIMARY,
+      livestream,
+    );
+    const backupUrl = await this.resolveEncoderControlUrl(
+      EncoderNode.BACKUP,
+      livestream,
+    );
     await Promise.all([
-      this.sendStopToNode(this.primaryUrl),
-      this.sendStopToNode(this.backupUrl),
+      this.sendStopToNode(primaryUrl),
+      this.sendStopToNode(backupUrl),
     ]);
 
     const session = await this.getActiveSession(livestreamId);
@@ -119,8 +134,38 @@ export class EncoderService {
     await this.jobRepo.save(job);
   }
 
-  async getHealth(node: EncoderNode): Promise<EncoderHealthResponse | null> {
-    const url = this.getNodeUrl(node);
+  /** Health trực tiếp theo base URL (preflight khi chọn VPS). */
+  async getHealthAtUrl(baseUrl: string): Promise<EncoderHealthResponse | null> {
+    const url = baseUrl.replace(/\/+$/, '');
+    const timeoutMs = this.configService.get<number>(
+      'ENCODER_HEALTH_TIMEOUT_MS',
+    );
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(`${url}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      return (await res.json()) as EncoderHealthResponse;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Health của một role logic (primary|backup). Nếu có livestreamId, URL lấy theo VPS gán trên livestream.
+   */
+  async getHealth(
+    node: EncoderNode,
+    livestreamId?: string | null,
+  ): Promise<EncoderHealthResponse | null> {
+    let livestream: Livestream | null = null;
+    if (livestreamId) {
+      livestream = await this.livestreamRepo.findOne({
+        where: { id: livestreamId },
+      });
+    }
+    const url = await this.resolveEncoderControlUrl(node, livestream);
     const timeoutMs = this.configService.get<number>(
       'ENCODER_HEALTH_TIMEOUT_MS',
     );
@@ -141,11 +186,12 @@ export class EncoderService {
     }
   }
 
-  async probeMediaWithFfmpeg(
-    node: EncoderNode,
+  /** Preflight: probe theo URL cụ thể của VPS (không cần livestream). */
+  async probeMediaWithFfmpegAtUrl(
+    baseUrl: string,
     mediaPath: string,
   ): Promise<boolean> {
-    const url = this.getNodeUrl(node);
+    const url = baseUrl.replace(/\/+$/, '');
     const timeoutMs = this.configService.get<number>(
       'ENCODER_HEALTH_TIMEOUT_MS',
     );
@@ -166,6 +212,21 @@ export class EncoderService {
     } catch {
       return false;
     }
+  }
+
+  async probeMediaWithFfmpeg(
+    node: EncoderNode,
+    mediaPath: string,
+    livestreamId?: string | null,
+  ): Promise<boolean> {
+    let livestream: Livestream | null = null;
+    if (livestreamId) {
+      livestream = await this.livestreamRepo.findOne({
+        where: { id: livestreamId },
+      });
+    }
+    const url = await this.resolveEncoderControlUrl(node, livestream);
+    return this.probeMediaWithFfmpegAtUrl(url, mediaPath);
   }
 
   async getActiveSession(livestreamId: string): Promise<EncoderSession | null> {
@@ -214,6 +275,25 @@ export class EncoderService {
 
   private getNodeUrl(node: EncoderNode): string {
     return node === EncoderNode.PRIMARY ? this.primaryUrl : this.backupUrl;
+  }
+
+  private async resolveEncoderControlUrl(
+    node: EncoderNode,
+    livestream: Livestream | null | undefined,
+  ): Promise<string> {
+    if (livestream?.primaryEncoderVpsId && node === EncoderNode.PRIMARY) {
+      const u = await this.encoderVpsService.getResolvedBaseUrl(
+        livestream.primaryEncoderVpsId,
+      );
+      if (u) return u;
+    }
+    if (livestream?.backupEncoderVpsId && node === EncoderNode.BACKUP) {
+      const u = await this.encoderVpsService.getResolvedBaseUrl(
+        livestream.backupEncoderVpsId,
+      );
+      if (u) return u;
+    }
+    return this.getNodeUrl(node);
   }
 
   private async sendStopToNode(url: string): Promise<void> {

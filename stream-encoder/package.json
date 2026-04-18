@@ -6,7 +6,9 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main"
+    "start:prod": "node dist/main",
+    "deploy": "node ./deploy.js",
+    "5000": "node ./deploy.js 5000"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

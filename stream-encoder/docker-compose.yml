@@ -1,12 +1,11 @@
 services:
-  encoder-primary:
+  node-1:
     build:
       context: .
       dockerfile: Dockerfile
+    hostname: encoder-node-1
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      PORT: 8080
-      ENGINE_NODE: primary
       ENGINE_DB_POLL_MS: ${ENGINE_DB_POLL_MS:-2000}
       ENGINE_FFMPEG_BIN: ${ENGINE_FFMPEG_BIN:-ffmpeg}
       ENGINE_PREFETCH_ENABLED: ${ENGINE_PREFETCH_ENABLED:-true}
@@ -20,7 +19,7 @@ services:
     volumes:
       - ${MEDIA_MOUNT_PATH:-../be-livestream/media}:/data/media:ro
     ports:
-      - "${ENCODER_PRIMARY_PORT:-8081}:8080"
+      - "8081:8080"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -28,14 +27,13 @@ services:
       timeout: 5s
       retries: 3
 
-  encoder-backup:
+  node-2:
     build:
       context: .
       dockerfile: Dockerfile
+    hostname: encoder-node-2
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      PORT: 8080
-      ENGINE_NODE: backup
       ENGINE_DB_POLL_MS: ${ENGINE_DB_POLL_MS:-2000}
       ENGINE_FFMPEG_BIN: ${ENGINE_FFMPEG_BIN:-ffmpeg}
       ENGINE_PREFETCH_ENABLED: ${ENGINE_PREFETCH_ENABLED:-true}
@@ -49,7 +47,35 @@ services:
     volumes:
       - ${MEDIA_MOUNT_PATH:-../be-livestream/media}:/data/media:ro
     ports:
-      - "${ENCODER_BACKUP_PORT:-8082}:8080"
+      - "8082:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: encoder-node-3
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      ENGINE_DB_POLL_MS: ${ENGINE_DB_POLL_MS:-2000}
+      ENGINE_FFMPEG_BIN: ${ENGINE_FFMPEG_BIN:-ffmpeg}
+      ENGINE_PREFETCH_ENABLED: ${ENGINE_PREFETCH_ENABLED:-true}
+      ENGINE_PREFETCH_LOG_SKIPS: ${ENGINE_PREFETCH_LOG_SKIPS:-false}
+      ENGINE_CACHE_DIR: ${ENGINE_CACHE_DIR:-/tmp/encoder-cache}
+      POSTGRES_HOST: ${POSTGRES_HOST:-host.docker.internal}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5433}
+      POSTGRES_DB: ${POSTGRES_DB:-Backend_HGM}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ${MEDIA_MOUNT_PATH:-../be-livestream/media}:/data/media:ro
+    ports:
+      - "8083:8080"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
