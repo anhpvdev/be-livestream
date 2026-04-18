@@ -6,10 +6,6 @@ import { EncoderService } from './encoder.service';
 import { EncoderNode } from './entities/encoder-session.entity';
 import { LivestreamProgress } from '../livestream/entities/livestream-progress.entity';
 import { AppEnv } from '@/core/config/app-configs';
-import { EncoderFailoverService } from './encoder-failover.service';
-import { Livestream } from '../livestream/entities/livestream.entity';
-import { MediaFile } from '../media/entities/media.entity';
-import { EncoderJob } from './entities/encoder-job.entity';
 
 interface MonitoredStream {
   livestreamId: string;
@@ -29,16 +25,9 @@ export class EncoderHealthService implements OnModuleDestroy {
 
   constructor(
     private readonly encoderService: EncoderService,
-    private readonly encoderFailoverService: EncoderFailoverService,
     private readonly configService: ConfigService<AppEnv>,
     @InjectRepository(LivestreamProgress)
     private readonly progressRepo: Repository<LivestreamProgress>,
-    @InjectRepository(Livestream)
-    private readonly livestreamRepo: Repository<Livestream>,
-    @InjectRepository(MediaFile)
-    private readonly mediaRepo: Repository<MediaFile>,
-    @InjectRepository(EncoderJob)
-    private readonly encoderJobRepo: Repository<EncoderJob>,
   ) {
     this.healthIntervalMs = this.configService.get<number>(
       'ENCODER_HEALTH_INTERVAL_MS',
@@ -107,6 +96,8 @@ export class EncoderHealthService implements OnModuleDestroy {
     livestreamId: string,
     monitor: MonitoredStream,
   ): Promise<void> {
+    const currentNode = monitor.currentNode;
+    const fallbackNode = this.getBackupNode(currentNode);
     const health = await this.encoderService.getHealth(
       monitor.currentNode,
       livestreamId,
@@ -114,6 +105,23 @@ export class EncoderHealthService implements OnModuleDestroy {
     const inGracePeriod = Date.now() < monitor.graceUntilMs;
 
     if (!health || health.status !== 'running') {
+      const fallbackHealth = await this.encoderService.getHealth(
+        fallbackNode,
+        livestreamId,
+      );
+      if (fallbackHealth?.status === 'running') {
+        if (monitor.currentNode !== fallbackNode) {
+          this.logger.warn(
+            `Monitor node switched to [${fallbackNode}] because [${currentNode}] is not running`,
+          );
+        }
+        monitor.currentNode = fallbackNode;
+        monitor.missCount = 0;
+        monitor.graceUntilMs = Date.now() + this.startupGraceMs;
+        await this.updateProgress(livestreamId, fallbackHealth);
+        return;
+      }
+
       if (inGracePeriod) {
         return;
       }
@@ -123,21 +131,12 @@ export class EncoderHealthService implements OnModuleDestroy {
       );
 
       if (monitor.missCount >= this.failoverThreshold) {
-        const backupNode = this.getBackupNode(monitor.currentNode);
-        const backupHealth = await this.encoderService.getHealth(
-          backupNode,
-          livestreamId,
+        this.logger.warn(
+          `Không trigger failover từ BE. Chờ worker takeover theo DB lease — livestream=${livestreamId}, currentNode=${monitor.currentNode}, fallbackNode=${fallbackNode}`,
         );
-        if (backupHealth?.status === 'running') {
-          this.logger.warn(
-            `Primary node missed nhưng backup [${backupNode}] đang RUNNING, chuyển monitor sang backup`,
-          );
-          monitor.currentNode = backupNode;
-          monitor.missCount = 0;
-          monitor.graceUntilMs = Date.now() + this.startupGraceMs;
-          return;
-        }
-        await this.triggerFailover(livestreamId, monitor);
+        monitor.currentNode = fallbackNode;
+        monitor.missCount = 0;
+        monitor.graceUntilMs = Date.now() + this.startupGraceMs;
       }
       return;
     }
@@ -173,113 +172,9 @@ export class EncoderHealthService implements OnModuleDestroy {
     await this.progressRepo.save(progress);
   }
 
-  private async triggerFailover(
-    livestreamId: string,
-    monitor: MonitoredStream,
-  ): Promise<void> {
-    this.logger.warn(
-      `FAILOVER triggered for livestream ${livestreamId}: [${monitor.currentNode}] -> [${this.getBackupNode(monitor.currentNode)}]`,
-    );
-
-    const activeSession =
-      await this.encoderService.getActiveSession(livestreamId);
-    if (activeSession) {
-      await this.encoderService.markSessionCrashed(
-        activeSession.id,
-        `Health check missed ${this.failoverThreshold} times`,
-      );
-    }
-
-    const progress = await this.progressRepo.findOne({
-      where: { livestreamId },
-      order: { updatedAt: 'DESC' },
-    });
-    const job = await this.encoderJobRepo.findOne({
-      where: { livestreamId },
-      select: ['currentTimestampStr', 'currentTimestampMs'],
-    });
-    const seekTo = this.pickBestSeekTo(
-      progress?.currentTimestampStr ?? null,
-      this.toNumber(progress?.currentTimestampMs),
-      job?.currentTimestampStr ?? null,
-      this.toNumber(job?.currentTimestampMs),
-    );
-    const backupNode = this.getBackupNode(monitor.currentNode);
-
-    const livestream = await this.livestreamRepo.findOne({
-      where: { id: livestreamId },
-    });
-    if (!livestream) {
-      this.logger.error(
-        `Failover aborted: livestream ${livestreamId} not found`,
-      );
-      return;
-    }
-
-    const media = await this.mediaRepo.findOne({
-      where: { id: livestream.mediaFileId },
-    });
-    if (!media) {
-      this.logger.error(
-        `Failover aborted: media ${livestream.mediaFileId} not found`,
-      );
-      return;
-    }
-
-    try {
-      await this.encoderFailoverService.executeFailover(
-        livestream,
-        media,
-        monitor.currentNode,
-        seekTo,
-      );
-      monitor.currentNode = backupNode;
-      monitor.missCount = 0;
-      monitor.graceUntilMs = Date.now() + this.startupGraceMs;
-
-      this.logger.log(
-        `Failover: starting [${backupNode}] encoder from ${seekTo}`,
-      );
-    } catch (err) {
-      this.logger.error(`Failover failed: ${err.message}`);
-    }
-  }
-
   private getBackupNode(current: EncoderNode): EncoderNode {
     return current === EncoderNode.PRIMARY
       ? EncoderNode.BACKUP
       : EncoderNode.PRIMARY;
-  }
-
-  private pickBestSeekTo(
-    progressStr: string | null,
-    progressMs: number | null,
-    jobStr: string | null,
-    jobMs: number | null,
-  ): string {
-    const candidates = [
-      { str: progressStr, ms: progressMs ?? this.parseTimestampToMs(progressStr) },
-      { str: jobStr, ms: jobMs ?? this.parseTimestampToMs(jobStr) },
-    ].filter((x): x is { str: string; ms: number } => !!x.str && Number.isFinite(x.ms ?? NaN));
-
-    if (!candidates.length) return '00:00:00.000';
-    candidates.sort((a, b) => b.ms - a.ms);
-    return candidates[0].str;
-  }
-
-  private parseTimestampToMs(value: string | null): number | null {
-    if (!value) return null;
-    const match = value.match(/(\d+):(\d+):(\d+)\.(\d+)/);
-    if (!match) return null;
-    const hours = Number(match[1]);
-    const minutes = Number(match[2]);
-    const seconds = Number(match[3]);
-    const millis = Number(match[4].padEnd(3, '0').slice(0, 3));
-    return hours * 3600000 + minutes * 60000 + seconds * 1000 + millis;
-  }
-
-  private toNumber(value: number | bigint | null | undefined): number | null {
-    if (value === null || value === undefined) return null;
-    return typeof value === 'bigint' ? Number(value) : value;
   }
 }

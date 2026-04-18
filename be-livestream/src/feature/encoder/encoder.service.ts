@@ -10,7 +10,6 @@ import {
 import {
   EncoderDesiredState,
   EncoderJob,
-  EncoderSeekMode,
 } from './entities/encoder-job.entity';
 import { Livestream } from '../livestream/entities/livestream.entity';
 import { MediaFile } from '../media/entities/media.entity';
@@ -41,19 +40,14 @@ export class EncoderService {
   async startEncoder(
     livestream: Livestream,
     media: MediaFile,
-    seekTo = '00:00:00.000',
     node: EncoderNode = EncoderNode.PRIMARY,
     profileId: string | null = null,
-    seekMode: EncoderSeekMode = EncoderSeekMode.NORMAL,
   ): Promise<EncoderSession> {
     const payload = {
       mediaPath: `/data/media/${media.storageKey}`,
       rtmpUrl: livestream.youtubeRtmpUrl,
       backupRtmpUrl: livestream.youtubeBackupRtmpUrl,
       streamKey: livestream.youtubeStreamKey,
-      seekTo,
-      seekMode,
-      currentMediaId: media.id,
     };
     await this.enqueueRunJob(livestream.id, payload, profileId);
 
@@ -67,7 +61,7 @@ export class EncoderService {
 
     await this.sessionRepo.save(session);
     this.logger.log(
-      `Encoder [${node}] started for livestream ${livestream.id} (seek: ${seekTo})`,
+      `Encoder [${node}] started for livestream ${livestream.id}`,
     );
 
     return session;
@@ -106,25 +100,28 @@ export class EncoderService {
       rtmpUrl: string;
       backupRtmpUrl: string | null;
       streamKey: string;
-      seekTo: string;
-      seekMode: EncoderSeekMode;
-      currentMediaId: string | null;
     },
     profileId: string | null,
   ): Promise<void> {
     const current = await this.jobRepo.findOne({ where: { livestreamId } });
     const job = current ?? this.jobRepo.create({ livestreamId });
 
+    // Control-plane fields (BE ownership)
     job.desiredState = EncoderDesiredState.RUNNING;
     job.mediaPath = payload.mediaPath;
     job.rtmpUrl = payload.rtmpUrl;
     job.backupRtmpUrl = payload.backupRtmpUrl;
     job.streamKey = payload.streamKey;
-    job.seekTo = payload.seekTo;
-    job.seekMode = payload.seekMode;
-    job.profileId = profileId;
-    job.currentVideoIndex = 0;
-    job.currentMediaId = payload.currentMediaId;
+    if (profileId !== null) {
+      job.profileId = profileId;
+    }
+
+    // Không reset runtime cursor trong BE:
+    // - currentVideoIndex
+    // - currentMediaId
+    // - playlistGeneration
+    // Worker sẽ quản lý toàn bộ các field này khi stream đang chạy.
+
     if (job.playlistGeneration === null || job.playlistGeneration === undefined) {
       job.playlistGeneration = 0;
     }
@@ -138,7 +135,6 @@ export class EncoderService {
 
     job.desiredState = EncoderDesiredState.STOPPED;
     job.activeNode = null;
-    job.seekMode = EncoderSeekMode.NORMAL;
 
     await this.jobRepo.save(job);
   }

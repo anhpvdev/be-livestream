@@ -16,4 +16,9 @@ export type EncoderJobRow = {
   owner_node: string | null;
   owner_epoch: number | null;
   lease_until: string | null;
+  start_current_media_at: string | null;
+  /** Khoảng thời gian wall-clock (ms) do DB tính: NOW() - start_current_media_at (cùng mốc với timestamptz). */
+  wall_elapsed_ms: number | null;
+  current_timestamp_ms: number | null;
+  current_timestamp_str: string | null;
 };

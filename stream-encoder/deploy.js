@@ -73,6 +73,30 @@ const run = async () => {
     );
   }
 
+  const cleanupArgs = [
+    'compose',
+    '-f',
+    'docker-compose.deploy.yml',
+    '-p',
+    projectName,
+    'rm',
+    '-sf',
+    'encoder',
+  ];
+  const cleanupResult = spawnSync('docker', cleanupArgs, {
+    cwd,
+    env,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  if (cleanupResult.error) {
+    console.error(`Failed to cleanup old container logs: ${cleanupResult.error.message}`);
+    process.exit(1);
+  }
+  if (typeof cleanupResult.status === 'number' && cleanupResult.status !== 0) {
+    process.exit(cleanupResult.status);
+  }
+
   const composeArgs = [
     'compose',
     '-f',
@@ -82,6 +106,7 @@ const run = async () => {
     'up',
     '-d',
     '--build',
+    '--force-recreate',
   ];
 
   const result = spawnSync('docker', composeArgs, {

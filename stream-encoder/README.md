@@ -7,6 +7,7 @@ Worker encoder độc lập (NestJS + FFmpeg). Service này đọc job từ DB v
 - Poll bảng `encoder_jobs` từ PostgreSQL
 - Chạy FFmpeg stream theo job hiện tại
 - Gửi heartbeat/progress về DB
+- Tự quản lý ownership lease và runtime playlist cursor
 - Prefetch media kế tiếp vào cache cục bộ (tránh tải lặp nếu đã có sẵn)
 - Tự dọn cache khi media bị xoá khỏi profile
 - API vận hành:
@@ -59,8 +60,14 @@ Mỗi port sẽ có project compose riêng (`stream-encoder-<port>`), nên có t
 ### Định danh và vai trò node
 
 - Mỗi container có `hostname` riêng (`encoder-node-1` …). Process dùng `HOSTNAME` làm định danh runtime (lease/heartbeat, webhook đăng ký VPS).
-- Vai trò main/backup là runtime theo từng livestream: node owner đẩy URL primary, một follower giữ lock backup đẩy URL backup.
+- Vai trò main/backup là runtime theo từng livestream: node owner đẩy URL primary, follower đẩy backup theo DB state.
 - Không cần cấu hình role cố định trong env.
+
+### Boundary với BE (quan trọng)
+
+- `be-livestream` chỉ là control-plane: tạo/stop job, update profile/media.
+- `stream-encoder` là playback-plane: tự quyết định phát/lặp/chuyển bài/takeover.
+- Khi job đã `running`, BE có thể down tạm thời mà stream vẫn chạy nếu DB còn hoạt động.
 
 ## Yêu cầu trước khi chạy
 

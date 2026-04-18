@@ -12,11 +12,6 @@ export enum EncoderDesiredState {
   STOPPED = 'stopped',
 }
 
-export enum EncoderSeekMode {
-  NORMAL = 'normal',
-  FAILOVER = 'failover',
-}
-
 @Entity('encoder_jobs')
 export class EncoderJob {
   @PrimaryColumn({ type: 'uuid', name: 'livestream_id' })
@@ -38,16 +33,17 @@ export class EncoderJob {
   @Column({ type: 'text', name: 'stream_key', nullable: true })
   streamKey: string | null;
 
-  @Column({ type: 'varchar', length: 20, name: 'seek_to', nullable: true })
+  /** Thời điểm seek trong clip (ffmpeg), runtime do worker; có thể set khi failover explicit. */
+  @Column({ type: 'varchar', length: 32, name: 'seek_to', nullable: true })
   seekTo: string | null;
 
   @Column({
     type: 'varchar',
     length: 16,
     name: 'seek_mode',
-    default: EncoderSeekMode.NORMAL,
+    default: 'normal',
   })
-  seekMode: EncoderSeekMode;
+  seekMode: string;
 
   @Column({ type: 'uuid', name: 'profile_id', nullable: true })
   profileId: string | null;
@@ -74,6 +70,10 @@ export class EncoderJob {
     nullable: true,
   })
   currentTimestampStr: string | null;
+
+  /** Thời điểm wall-clock khi owner bắt đầu phát media hiện tại (worker ghi, phục vụ tính seek khi failover). */
+  @Column({ type: 'timestamptz', name: 'start_current_media_at', nullable: true })
+  startCurrentMediaAt: Date | null;
 
   @Column({ type: 'timestamptz', name: 'last_heartbeat_at', nullable: true })
   lastHeartbeatAt: Date | null;

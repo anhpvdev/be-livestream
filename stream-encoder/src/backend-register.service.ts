@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EngineEnv } from './config/env.schema';
+import { EncoderVpsBindingService } from './engine/encoder-vps-binding.service';
 import { EngineIdentityService } from './engine/engine-identity.service';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -16,6 +17,7 @@ export class BackendRegisterService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService<EngineEnv>,
     private readonly identity: EngineIdentityService,
+    private readonly encoderVpsBinding: EncoderVpsBindingService,
   ) {}
 
   onModuleInit(): void {
@@ -87,6 +89,14 @@ export class BackendRegisterService implements OnModuleInit, OnModuleDestroy {
           `Đăng ký VPS ${isStartup ? `lần ${attempt}` : 'heartbeat'}: HTTP ${res.status} ${text.slice(0, 200)}`,
         );
         return false;
+      }
+      try {
+        const data = JSON.parse(text) as { id?: string };
+        if (data?.id) {
+          this.encoderVpsBinding.setEncoderVpsIdFromRegistration(data.id);
+        }
+      } catch {
+        // response không phải JSON — bỏ qua gắn id
       }
       if (isStartup) {
         this.logger.log(`Đã đăng ký VPS với BE: ${text.slice(0, 120)}`);

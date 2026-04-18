@@ -8,8 +8,9 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import sharp = require('sharp');
 import { MediaFile, MediaFileKind, MediaFileStatus } from './entities/media.entity';
 import {
   Livestream,
@@ -19,6 +20,7 @@ import { UploadMediaDto } from './dto/upload-media.dto';
 @Injectable()
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
+  private static readonly MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
 
   constructor(
     @InjectRepository(MediaFile)
@@ -31,28 +33,29 @@ export class MediaService {
     file: Express.Multer.File,
     dto: UploadMediaDto,
   ): Promise<MediaFile> {
+    const normalizedFile = await this.normalizeUploadFile(file);
     const mediaId = randomUUID();
-    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sanitizedName = normalizedFile.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storageKey = `media/${mediaId}/${sanitizedName}`;
 
     const media = this.mediaRepo.create({
       id: mediaId,
       name: dto.name.trim(),
-      originalName: file.originalname,
+      originalName: normalizedFile.originalname,
       storageKey,
-      mimeType: file.mimetype,
+      mimeType: normalizedFile.mimetype,
       kind: dto.type,
-      sizeBytes: file.size,
+      sizeBytes: normalizedFile.size,
       status: MediaFileStatus.UPLOADING,
     });
     await this.mediaRepo.save(media);
 
     try {
-      await this.persistToSharedVolume(storageKey, file.buffer);
+      await this.persistToSharedVolume(storageKey, normalizedFile.buffer);
 
       const metadata = await this.extractMetadata(
-        file.buffer,
-        file.originalname,
+        normalizedFile.buffer,
+        normalizedFile.originalname,
       );
       media.durationSeconds = metadata.durationSeconds;
       media.resolution = metadata.resolution;
@@ -234,5 +237,40 @@ export class MediaService {
   private async deleteFromSharedVolume(storageKey: string): Promise<void> {
     const fullPath = join(process.cwd(), 'media', storageKey);
     await rm(fullPath, { force: true });
+  }
+
+  private async normalizeUploadFile(
+    file: Express.Multer.File,
+  ): Promise<Express.Multer.File> {
+    const isImage = file.mimetype.startsWith('image/');
+    if (!isImage || file.size <= MediaService.MAX_IMAGE_SIZE_BYTES) {
+      return file;
+    }
+
+    const outputBuffer = await sharp(file.buffer)
+      .rotate()
+      .resize({
+        width: 1920,
+        height: 1080,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer();
+
+    const baseName = parse(file.originalname).name || 'image';
+    const nextOriginalName = `${baseName}.jpg`;
+
+    this.logger.log(
+      `Compressed oversized image before save: ${file.originalname} (${file.size} -> ${outputBuffer.length} bytes)`,
+    );
+
+    return {
+      ...file,
+      buffer: outputBuffer,
+      size: outputBuffer.length,
+      mimetype: 'image/jpeg',
+      originalname: nextOriginalName,
+    };
   }
 }

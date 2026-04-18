@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LivestreamStatus, PrivacyStatus } from '../entities/livestream.entity';
-import { EncoderHealthResponse } from '../../encoder/dto/encoder-status.dto';
 
 export class LivestreamResponseDto {
   @ApiProperty()
@@ -33,23 +32,11 @@ export class LivestreamResponseDto {
   @ApiPropertyOptional()
   youtubeStreamId: string;
 
-  @ApiPropertyOptional({ description: 'RTMP URL hiện tại dùng để đẩy stream' })
-  streamUrl: string;
-
-  @ApiPropertyOptional()
-  youtubeBackupRtmpUrl: string;
-
   @ApiProperty({ enum: LivestreamStatus })
   status: LivestreamStatus;
 
   @ApiProperty({ enum: PrivacyStatus })
   privacyStatus: PrivacyStatus;
-
-  @ApiPropertyOptional()
-  actualStartTime: Date;
-
-  @ApiPropertyOptional()
-  actualEndTime: Date;
 
   @ApiProperty()
   createdAt: Date;
@@ -81,6 +68,26 @@ export class LivestreamProgressSnapshotDto {
   encoderSessionId: string;
 }
 
+export class LivestreamEncoderHealthDto {
+  @ApiPropertyOptional({ nullable: true })
+  node: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  status: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  livestreamId: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  timestampStr: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  bitrate: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  pid: number | null;
+}
+
 export class LivestreamEncoderNodeStatusDto {
   @ApiPropertyOptional({ nullable: true })
   encoderVpsId: string | null;
@@ -89,22 +96,10 @@ export class LivestreamEncoderNodeStatusDto {
   vpsName: string | null;
 
   @ApiPropertyOptional({ nullable: true })
-  vpsBaseUrl: string | null;
-
-  @ApiPropertyOptional({ nullable: true })
   resolvedBaseUrl: string | null;
 
-  @ApiPropertyOptional({ nullable: true })
-  vpsEnabled: boolean | null;
-
-  @ApiPropertyOptional({ nullable: true })
-  vpsLastSeenAt: Date | null;
-
-  @ApiProperty({ description: 'Nguồn URL encoder đang dùng: vps hoặc env' })
-  urlSource: 'vps' | 'env';
-
-  @ApiPropertyOptional({ nullable: true, type: EncoderHealthResponse })
-  health: EncoderHealthResponse | null;
+  @ApiPropertyOptional({ nullable: true, type: LivestreamEncoderHealthDto })
+  health: LivestreamEncoderHealthDto | null;
 
   @ApiProperty()
   isPlaylistAuthority: boolean;
@@ -119,7 +114,8 @@ export class LivestreamEncoderNodesDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'Node đang giữ quyền điều phối playlist trong encoder_jobs',
+    description:
+      'owner_node/active_node trong encoder_jobs khi khớp encoder_node của primary hoặc backup đang cấu hình; null nếu không khớp (dữ liệu cũ / encoder khác cùng DB)',
   })
   playlistAuthorityNode: string | null;
 }
@@ -139,53 +135,14 @@ export class LivestreamStatusResponseDto extends LivestreamResponseDto {
   })
   progress: LivestreamProgressSnapshotDto | null;
 
-  @ApiPropertyOptional({ description: 'Current encode timestamp in ms' })
-  currentTimestampMs: number;
-
-  @ApiPropertyOptional({ description: 'Current encode timestamp string' })
-  currentTimestampStr: string;
-
-  @ApiPropertyOptional({ description: 'Encoder node in use' })
-  encoderNode: string | null;
-
   @ApiPropertyOptional({ description: 'YouTube broadcast lifecycle status' })
   youtubeBroadcastStatus: string;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'Node encoder đang báo active trong encoder_jobs',
-  })
-  encoderJobActiveNode: string | null;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'current_media_id trong encoder_jobs (media encoder đang phát)',
-  })
-  encoderCurrentMediaId: string | null;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'current_video_index trong encoder_jobs',
-  })
-  encoderCurrentVideoIndex: number | null;
 
   @ApiProperty({
     type: LivestreamEncoderNodesDto,
     description: 'Thông số VPS + health hiện tại của encoder primary/backup',
   })
   encoderNodes: LivestreamEncoderNodesDto;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'Node thực tế đang giữ role primary runtime sau failover',
-  })
-  effectivePrimaryNode: string | null;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'Node thực tế đang giữ role backup runtime sau failover',
-  })
-  effectiveBackupNode: string | null;
 }
 
 export class StartLivestreamAckDto {
