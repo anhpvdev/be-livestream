@@ -17,6 +17,8 @@ import {
   LivestreamStatus,
 } from '../livestream/entities/livestream.entity';
 import { UploadMediaDto } from './dto/upload-media.dto';
+import { MediaResponseDto } from './dto/media-response.dto';
+
 @Injectable()
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
@@ -97,6 +99,23 @@ export class MediaService {
       throw new NotFoundException(`Media file ${id} not found`);
     }
     return media;
+  }
+
+  toResponseDto(media: MediaFile): MediaResponseDto {
+    return {
+      id: media.id,
+      name: media.name,
+      originalName: media.originalName,
+      storageKey: media.storageKey,
+      mimeType: media.mimeType,
+      type: media.kind,
+      sizeBytes: media.sizeBytes,
+      durationSeconds: media.durationSeconds,
+      resolution: media.resolution,
+      codec: media.codec,
+      status: media.status,
+      createdAt: media.createdAt,
+    };
   }
 
   async remove(id: string): Promise<void> {

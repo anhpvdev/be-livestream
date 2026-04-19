@@ -22,14 +22,17 @@ import { EncoderNode } from '../encoder/entities/encoder-session.entity';
 import { StartLivestreamDto } from './dto/start-livestream.dto';
 import { BroadcastSegmentService } from './broadcast-segment.service';
 import { LivestreamProfileService } from '../livestream-profile/livestream-profile.service';
+import { GetLivestreamStatusQueryDto } from './dto/get-livestream-status-query.dto';
 import {
   LivestreamEncoderHealthDto,
+  LivestreamStatusProfileDto,
   LivestreamStatusResponseDto,
   StartLivestreamAckDto,
 } from './dto/livestream-response.dto';
 import { YouTubeLivestreamOrchestratorService } from '../youtube-api/youtube-livestream-orchestrator.service';
 import { EncoderJob } from '../encoder/entities/encoder-job.entity';
 import { EncoderVpsService } from '../encoder/encoder-vps.service';
+import { parseCommaSeparatedTags } from '../youtube-api/youtube-tags.util';
 
 type LivestreamPreflightResult = {
   ok: boolean;
@@ -360,8 +363,14 @@ export class LivestreamService {
     return livestream;
   }
 
-  async getStatus(id: string): Promise<LivestreamStatusResponseDto> {
+  async getStatus(
+    id: string,
+    query: GetLivestreamStatusQueryDto = {},
+  ): Promise<LivestreamStatusResponseDto> {
     const livestream = await this.findById(id);
+
+    const populateMedia = query.populate_media === true;
+    const populateProfile = populateMedia || query.populate_profile === true;
 
     const activeSession = await this.encoderService.getActiveSession(id);
 
@@ -432,8 +441,52 @@ export class LivestreamService {
       !!configuredBackupNodeIdentity &&
       playlistAuthorityNode === configuredBackupNodeIdentity;
 
+    const { title: _omitTitle, description: _omitDesc, ...snapshot } =
+      this.toResponse({ ...livestream, mediaFileId: playbackMediaId });
+
+    let profile: LivestreamStatusProfileDto | null | undefined;
+    if (populateProfile) {
+      if (!livestream.profileId) {
+        profile = null;
+      } else {
+        const p = await this.livestreamProfileService.findById(
+          livestream.profileId,
+        );
+        const base: LivestreamStatusProfileDto = {
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          videoMediaIds: p.videoMediaIds ?? [],
+          livestreamTitle: p.livestreamTitle,
+          livestreamDescription: p.livestreamDescription,
+          livestreamTags: p.livestreamTags,
+          thumbnailMediaId: p.thumbnailMediaId,
+          privacyStatus: p.privacyStatus,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+        };
+        if (populateMedia) {
+          const videoIds = p.videoMediaIds ?? [];
+          const videoFiles = await Promise.all(
+            videoIds.map((vid) => this.mediaService.findById(vid)),
+          );
+          base.videoMedia = videoFiles.map((m) =>
+            this.mediaService.toResponseDto(m),
+          );
+          if (p.thumbnailMediaId) {
+            const thumb = await this.mediaService.findById(p.thumbnailMediaId);
+            base.thumbnailMedia = this.mediaService.toResponseDto(thumb);
+          } else {
+            base.thumbnailMedia = null;
+          }
+        }
+        profile = base;
+      }
+    }
+
     return {
-      ...this.toResponse({ ...livestream, mediaFileId: playbackMediaId }),
+      ...snapshot,
+      ...(populateProfile ? { profile } : {}),
       progress: progress
         ? {
             currentTimestampMs: this.coerceBigIntField(
@@ -628,12 +681,15 @@ export class LivestreamService {
       );
     }
 
+    const tags = parseCommaSeparatedTags(profile.livestreamTags);
+
     // Mỗi lần start sẽ tạo broadcast + stream mới, không tái sử dụng broadcast cũ.
     return this.youtubeOrchestrator.createAndBindBroadcast(dto.googleAccountId, {
       title: profile.livestreamTitle,
       description: profile.livestreamDescription ?? undefined,
       scheduledStartTime: new Date(),
       privacyStatus: profile.privacyStatus || PrivacyStatus.UNLISTED,
+      tags: tags.length ? tags : undefined,
     });
   }
 }

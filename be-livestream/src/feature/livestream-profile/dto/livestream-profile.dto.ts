@@ -49,6 +49,16 @@ export class CreateLivestreamProfileDto {
   livestreamDescription?: string;
 
   @ApiPropertyOptional({
+    description:
+      'Tags cho video/broadcast trên YouTube, cách nhau bằng dấu phẩy (sau khi start sẽ gửi qua API videos.update)',
+    example: 'gaming, live, music',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  livestreamTags?: string;
+
+  @ApiPropertyOptional({
     description: 'Media ID ảnh thumbnail để set cho broadcast khi start',
   })
   @IsOptional()
@@ -107,6 +117,16 @@ export class UpdateLivestreamProfileDto {
   @IsOptional()
   @IsString()
   livestreamDescription?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Tags YouTube, cách nhau bằng dấu phẩy (áp dụng khi start qua videos.update)',
+    example: 'gaming, live',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  livestreamTags?: string;
 
   @ApiPropertyOptional({
     description: 'Media ID ảnh thumbnail để set cho broadcast khi start',

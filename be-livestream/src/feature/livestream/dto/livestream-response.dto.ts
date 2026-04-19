@@ -1,4 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+import { MediaResponseDto } from '../../media/dto/media-response.dto';
 import { LivestreamStatus, PrivacyStatus } from '../entities/livestream.entity';
 
 export class LivestreamResponseDto {
@@ -120,7 +121,59 @@ export class LivestreamEncoderNodesDto {
   playlistAuthorityNode: string | null;
 }
 
-export class LivestreamStatusResponseDto extends LivestreamResponseDto {
+/** Profile gắn với livestream khi bật populate_profile trên GET .../status */
+export class LivestreamStatusProfileDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  description: string | null;
+
+  @ApiProperty({ type: [String] })
+  videoMediaIds: string[];
+
+  @ApiPropertyOptional({ nullable: true })
+  livestreamTitle: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  livestreamDescription: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  livestreamTags: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  thumbnailMediaId: string | null;
+
+  @ApiProperty({ enum: PrivacyStatus })
+  privacyStatus: PrivacyStatus;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiPropertyOptional({
+    type: [MediaResponseDto],
+    description: 'Có khi populate_media=true: thông tin file đầy đủ theo thứ tự videoMediaIds',
+  })
+  videoMedia?: MediaResponseDto[];
+
+  @ApiPropertyOptional({
+    type: MediaResponseDto,
+    nullable: true,
+    description: 'Có khi populate_media=true và profile có thumbnailMediaId',
+  })
+  thumbnailMedia?: MediaResponseDto | null;
+}
+
+export class LivestreamStatusResponseDto extends OmitType(LivestreamResponseDto, [
+  'title',
+  'description',
+]) {
   @ApiPropertyOptional({
     nullable: true,
     description:
@@ -143,6 +196,14 @@ export class LivestreamStatusResponseDto extends LivestreamResponseDto {
     description: 'Thông số VPS + health hiện tại của encoder primary/backup',
   })
   encoderNodes: LivestreamEncoderNodesDto;
+
+  @ApiPropertyOptional({
+    type: LivestreamStatusProfileDto,
+    nullable: true,
+    description:
+      'Có khi populate_profile=true (hoặc populate_media=true). null nếu livestream không có profileId.',
+  })
+  profile?: LivestreamStatusProfileDto | null;
 }
 
 export class StartLivestreamAckDto {

@@ -24,6 +24,7 @@ import {
   StartLivestreamAckDto,
   LivestreamStatusResponseDto,
 } from './dto/livestream-response.dto';
+import { GetLivestreamStatusQueryDto } from './dto/get-livestream-status-query.dto';
 import { ListLivestreamQueryDto } from './dto/list-livestream-query.dto';
 
 @ApiTags('Livestream')
@@ -59,13 +60,18 @@ export class LivestreamController {
   }
 
   @Get(':id/status')
-  @ApiOperation({ summary: 'Get livestream status with progress' })
+  @ApiOperation({
+    summary: 'Get livestream status with progress',
+    description:
+      'Không trả title/description của bản ghi livestream; dùng profileId. Query populate_profile / populate_media để lấy thêm profile và chi tiết file media (populate_media bật ngầm populate_profile).',
+  })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiOkResponse({ type: LivestreamStatusResponseDto })
   async getStatus(
     @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GetLivestreamStatusQueryDto,
   ): Promise<LivestreamStatusResponseDto> {
-    return this.livestreamService.getStatus(id);
+    return this.livestreamService.getStatus(id, query);
   }
 
   @Post(':id/resume')

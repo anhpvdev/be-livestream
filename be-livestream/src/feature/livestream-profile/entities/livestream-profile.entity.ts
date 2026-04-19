@@ -29,6 +29,10 @@ export class LivestreamProfile {
   @Column({ type: 'text', nullable: true })
   livestreamDescription: string | null;
 
+  /** Tags YouTube (chuỗi nhập tay, phân tách bằng dấu phẩy); áp dụng qua videos.update sau khi tạo broadcast. */
+  @Column({ type: 'text', name: 'livestream_tags', nullable: true })
+  livestreamTags: string | null;
+
   @Column({ type: 'uuid', nullable: true })
   thumbnailMediaId: string | null;
 

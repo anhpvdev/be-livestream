@@ -5,6 +5,7 @@ import {
   CreateStreamResult,
   YouTubeApiService,
 } from './youtube-api.service';
+import type { ProfileYoutubeSyncDelta } from '../livestream-profile/profile-youtube-sync.types';
 
 type CreateAndBindResult = {
   broadcastId: string;
@@ -35,6 +36,14 @@ export class YouTubeLivestreamOrchestratorService {
         stream.streamId,
       );
 
+      if (params.tags?.length) {
+        await this.youtubeApiService.updateVideoSnippetTags(
+          auth,
+          broadcast.broadcastId,
+          params.tags,
+        );
+      }
+
       return {
         broadcastId: broadcast.broadcastId,
         stream,
@@ -58,6 +67,55 @@ export class YouTubeLivestreamOrchestratorService {
   ): Promise<void> {
     await this.withAuthRetry(googleAccountId, async (auth) => {
       await this.youtubeApiService.transitionBroadcast(auth, broadcastId, status);
+    });
+  }
+
+  /**
+   * Đồng bộ metadata profile lên phiên live (broadcast + video + thumbnail tùy chọn).
+   */
+  async syncProfileMetadataToActiveBroadcast(
+    googleAccountId: string,
+    broadcastId: string,
+    payload: {
+      title: string;
+      description: string;
+      privacyStatus: 'public' | 'unlisted' | 'private';
+      tags: string[];
+      thumbnailBuffer?: { buffer: Buffer; mimeType: string };
+    },
+    delta: ProfileYoutubeSyncDelta,
+  ): Promise<void> {
+    await this.withAuthRetry(googleAccountId, async (auth) => {
+      if (delta.video) {
+        await this.youtubeApiService.updateVideoSnippetForLive(auth, broadcastId, {
+          title: payload.title,
+          description: payload.description,
+          tags: payload.tags,
+        });
+      }
+      if (delta.broadcast) {
+        await this.youtubeApiService.updateLiveBroadcastDisplayMetadata(
+          auth,
+          broadcastId,
+          {
+            title: payload.title,
+            description: payload.description,
+            privacyStatus: payload.privacyStatus,
+          },
+        );
+      }
+      if (delta.thumbnail && payload.thumbnailBuffer) {
+        const mime =
+          payload.thumbnailBuffer.mimeType === 'image/jpg' ?
+            'image/jpeg'
+          : payload.thumbnailBuffer.mimeType;
+        await this.youtubeApiService.setThumbnail(
+          auth,
+          broadcastId,
+          payload.thumbnailBuffer.buffer,
+          mime,
+        );
+      }
     });
   }
 

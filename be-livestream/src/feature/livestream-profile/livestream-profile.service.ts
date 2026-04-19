@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,15 +21,20 @@ import {
   PrivacyStatus,
   LivestreamStatus,
 } from '../livestream/entities/livestream.entity';
+import { ProfileLiveSyncService } from './profile-live-sync.service';
+import type { ProfileYoutubeSyncDelta } from './profile-youtube-sync.types';
 
 @Injectable()
 export class LivestreamProfileService {
+  private readonly logger = new Logger(LivestreamProfileService.name);
+
   constructor(
     @InjectRepository(LivestreamProfile)
     private readonly profileRepo: Repository<LivestreamProfile>,
     @InjectRepository(Livestream)
     private readonly livestreamRepo: Repository<Livestream>,
     private readonly mediaService: MediaService,
+    private readonly profileLiveSync: ProfileLiveSyncService,
   ) {}
 
   async createProfile(
@@ -47,6 +53,7 @@ export class LivestreamProfileService {
       videoMediaIds: dto.videoMediaIds,
       livestreamTitle: dto.livestreamTitle?.trim() ?? null,
       livestreamDescription: dto.livestreamDescription ?? null,
+      livestreamTags: dto.livestreamTags?.trim() ? dto.livestreamTags.trim() : null,
       thumbnailMediaId: dto.thumbnailMediaId ?? null,
       privacyStatus: dto.privacyStatus ?? PrivacyStatus.UNLISTED,
     });
@@ -58,6 +65,7 @@ export class LivestreamProfileService {
     dto: UpdateLivestreamProfileDto,
   ): Promise<LivestreamProfile> {
     const profile = await this.findById(id);
+    const beforeYoutube = this.snapshotYoutubeRelevantFields(profile);
 
     if (dto.name !== undefined) {
       profile.name = dto.name.trim();
@@ -71,6 +79,9 @@ export class LivestreamProfileService {
     if (dto.livestreamDescription !== undefined) {
       profile.livestreamDescription = dto.livestreamDescription;
     }
+    if (dto.livestreamTags !== undefined) {
+      profile.livestreamTags = dto.livestreamTags.trim() ? dto.livestreamTags.trim() : null;
+    }
     if (dto.thumbnailMediaId !== undefined) {
       if (dto.thumbnailMediaId) {
         await this.validateThumbnailMediaId(dto.thumbnailMediaId);
@@ -81,7 +92,53 @@ export class LivestreamProfileService {
       profile.privacyStatus = dto.privacyStatus;
     }
 
-    return this.profileRepo.save(profile);
+    const saved = await this.profileRepo.save(profile);
+
+    const afterYoutube = this.snapshotYoutubeRelevantFields(saved);
+    const delta: ProfileYoutubeSyncDelta = {
+      video:
+        beforeYoutube.resolvedTitle !== afterYoutube.resolvedTitle ||
+        beforeYoutube.resolvedDesc !== afterYoutube.resolvedDesc ||
+        beforeYoutube.tagsRaw !== afterYoutube.tagsRaw,
+      broadcast:
+        beforeYoutube.resolvedTitle !== afterYoutube.resolvedTitle ||
+        beforeYoutube.resolvedDesc !== afterYoutube.resolvedDesc ||
+        beforeYoutube.privacy !== afterYoutube.privacy,
+      thumbnail:
+        beforeYoutube.thumbnailMediaId !== afterYoutube.thumbnailMediaId,
+    };
+
+    if (delta.video || delta.broadcast || delta.thumbnail) {
+      void this.profileLiveSync
+        .syncActiveLivestreamsAfterProfileUpdate(saved, delta)
+        .catch((err: unknown) => {
+          this.logger.error(
+            `Đồng bộ profile → livestream thất bại: ${err instanceof Error ? err.message : String(err)}`,
+            err instanceof Error ? err.stack : undefined,
+          );
+        });
+    }
+
+    return saved;
+  }
+
+  /** Cùng logic hiển thị với đồng bộ YouTube / start livestream. */
+  private snapshotYoutubeRelevantFields(p: LivestreamProfile): {
+    resolvedTitle: string;
+    resolvedDesc: string;
+    tagsRaw: string;
+    privacy: PrivacyStatus;
+    thumbnailMediaId: string | null;
+  } {
+    return {
+      resolvedTitle: p.livestreamTitle?.trim() ?
+          p.livestreamTitle.trim()
+        : p.name.trim(),
+      resolvedDesc: p.livestreamDescription ?? p.description ?? '',
+      tagsRaw: p.livestreamTags?.trim() ?? '',
+      privacy: p.privacyStatus,
+      thumbnailMediaId: p.thumbnailMediaId,
+    };
   }
 
   async listProfiles(): Promise<LivestreamProfile[]> {

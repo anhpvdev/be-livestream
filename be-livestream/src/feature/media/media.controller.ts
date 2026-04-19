@@ -53,7 +53,7 @@ export class MediaController {
     @UploadedFile() file: Express.Multer.File,
   ): Promise<MediaResponseDto> {
     const media = await this.mediaService.upload(file, dto);
-    return this.toResponse(media);
+    return this.mediaService.toResponseDto(media);
   }
 
   @Get()
@@ -61,7 +61,7 @@ export class MediaController {
   @ApiOkResponse({ type: [MediaResponseDto] })
   async findAll(@Query() query: ListMediaQueryDto): Promise<MediaResponseDto[]> {
     const list = await this.mediaService.findAll(query);
-    return list.map((m) => this.toResponse(m));
+    return list.map((m) => this.mediaService.toResponseDto(m));
   }
 
   @Get(':id')
@@ -72,7 +72,7 @@ export class MediaController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<MediaResponseDto> {
     const media = await this.mediaService.findById(id);
-    return this.toResponse(media);
+    return this.mediaService.toResponseDto(media);
   }
 
   @Delete(':id')
@@ -81,22 +81,5 @@ export class MediaController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.mediaService.remove(id);
-  }
-
-  private toResponse(media: any): MediaResponseDto {
-    return {
-      id: media.id,
-      name: media.name,
-      originalName: media.originalName,
-      storageKey: media.storageKey,
-      mimeType: media.mimeType,
-      type: media.kind,
-      sizeBytes: media.sizeBytes,
-      durationSeconds: media.durationSeconds,
-      resolution: media.resolution,
-      codec: media.codec,
-      status: media.status,
-      createdAt: media.createdAt,
-    };
   }
 }

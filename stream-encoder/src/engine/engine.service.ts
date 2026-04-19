@@ -387,11 +387,16 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
     const args: string[] = [];
     const gopFrames = Math.max(1, Math.floor(this.outputFps * this.outputGopSec));
-    if (params.seekTo && params.seekTo !== '00:00:00.000') args.push('-ss', params.seekTo);
+    // Live RTMP → YouTube: giữ bitrate ổn định (tránh cảnh báo "chưa nhận đủ video").
+    // minrate = b:v = maxrate + bufsize + nal-hrd=cbr ≈ CBR; zerolatency + veryfast ưu tiên độ trễ thấp.
+    const x264Params =
+      `keyint=${gopFrames}:min-keyint=${gopFrames}:scenecut=0:nal-hrd=cbr`;
+    args.push('-re', '-i', params.mediaPath);
+    // Seek từ đầu (0) → không thêm -ss. Khi resume: -ss sau -i (decode seek, A/V ổn định hơn input seek).
+    if (!this.isSeekAtStart(params.seekTo)) {
+      args.push('-ss', params.seekTo.trim());
+    }
     args.push(
-      '-re',
-      '-i',
-      params.mediaPath,
       '-r',
       String(this.outputFps),
       '-c:v',
@@ -400,15 +405,19 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       'veryfast',
       '-tune',
       'zerolatency',
+      '-threads',
+      '0',
       '-pix_fmt',
       'yuv420p',
       '-x264-params',
-      `keyint=${gopFrames}:min-keyint=${gopFrames}:scenecut=0`,
+      x264Params,
       '-g',
       String(gopFrames),
       '-keyint_min',
       String(gopFrames),
       '-b:v',
+      `${this.outputVideoBitrateKbps}k`,
+      '-minrate',
       `${this.outputVideoBitrateKbps}k`,
       '-maxrate',
       `${this.outputMaxrateKbps}k`,
@@ -424,6 +433,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       '2',
       '-af',
       'aresample=async=1:min_hard_comp=0.100:first_pts=0',
+      '-flvflags',
+      'no_duration_filesize',
       '-f',
       'flv',
       `${params.rtmpUrl}/${params.streamKey}`,
@@ -431,8 +442,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
     const proc = spawn(this.ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const runId = ++this.processRunId;
+    const safeOut = `${params.rtmpUrl}/***`;
+    const maskedArgs = args.map((a, i) =>
+      i === args.length - 1 ? safeOut : a,
+    );
     this.logger.log(
-      `Media start on node=${this.nodeName}, livestream=${params.livestreamId}, mediaId=${params.mediaId ?? 'unknown'}, seekTo=${params.seekTo}, output=${params.rtmpUrl}/${params.streamKey}`,
+      `ffmpeg ${maskedArgs.join(' ')} | node=${this.nodeName} livestream=${params.livestreamId} mediaId=${params.mediaId ?? 'unknown'} seekTo=${params.seekTo}`,
     );
     this.currentProcess = proc;
     this.currentStatus = 'running';
@@ -900,6 +915,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       const speedMatch = line.match(/speed=\s*([\d.]+x)/);
       if (speedMatch) this.currentSpeed = speedMatch[1];
     }
+  }
+
+  /** Phát từ đầu file / mốc 0 → không cần -ss (tránh rối và seek thừa). */
+  private isSeekAtStart(seekTo: string): boolean {
+    if (!seekTo?.trim()) return true;
+    return this.parseTimestampToMs(seekTo.trim()) <= 0;
   }
 
   private parseTimestampToMs(timeStr: string): number {
