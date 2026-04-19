@@ -1,5 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsUUID, ValidateIf } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsUUID } from 'class-validator';
 
 export class StartLivestreamDto {
   @ApiProperty({
@@ -16,23 +16,19 @@ export class StartLivestreamDto {
   @IsUUID()
   profileId: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description:
-      'UUID VPS encoder main (stream-ENGINE_NODE=primary). Bỏ trống cả hai VPS thì dùng ENCODER_PRIMARY_URL / ENCODER_BACKUP_URL từ env.',
-      example: 'c30c7535-25cf-4044-9d80-9b134facb0a8',
+      'UUID VPS encoder primary (ENGINE_NODE=primary). Phải khác backupEncoderVpsId.',
+    example: 'c30c7535-25cf-4044-9d80-9b134facb0a8',
   })
-  @ValidateIf((o: StartLivestreamDto) => !!o.backupEncoderVpsId)
   @IsUUID()
-  @IsOptional()
-  primaryEncoderVpsId?: string;
+  primaryEncoderVpsId: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description:
-      'UUID VPS encoder backup (ENGINE_NODE=backup). Phải cùng truyền với primary nếu dùng pool VPS.',
-      example: '9796e43c-c7f5-4711-9eae-0f57a467a7d4',
+      'UUID VPS encoder backup (ENGINE_NODE=backup). Phải khác primaryEncoderVpsId.',
+    example: '9796e43c-c7f5-4711-9eae-0f57a467a7d4',
   })
-  @ValidateIf((o: StartLivestreamDto) => !!o.primaryEncoderVpsId)
   @IsUUID()
-  @IsOptional()
-  backupEncoderVpsId?: string;
+  backupEncoderVpsId: string;
 }

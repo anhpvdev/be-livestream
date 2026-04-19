@@ -2,6 +2,7 @@ import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmHealthIndicator } from '@nestjs/terminus';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { EncoderVpsService } from '@/feature/encoder/encoder-vps.service';
 import { AppEnv } from '../config/app-configs';
 
 @ApiTags('Health')
@@ -10,10 +11,14 @@ export class HealthController {
   constructor(
     private readonly db: TypeOrmHealthIndicator,
     private readonly configService: ConfigService<AppEnv>,
+    private readonly encoderVpsService: EncoderVpsService,
   ) {}
 
   @Get()
-  @ApiOperation({ summary: 'Health check cho DB + encoder primary/backup' })
+  @ApiOperation({
+    summary:
+      'Health check DB + hai VPS encoder đầu tiên (enabled, theo createdAt) trong bảng encoder_vps',
+  })
   @ApiResponse({
     status: 200,
     description: 'All services are healthy',
@@ -23,10 +28,11 @@ export class HealthController {
     description: 'One or more services are unhealthy',
   })
   async check() {
-    const primaryUrl = this.configService.get<string>('ENCODER_PRIMARY_URL');
-    const backupUrl = this.configService.get<string>('ENCODER_BACKUP_URL');
     const timeoutMs =
       this.configService.get<number>('ENCODER_HEALTH_TIMEOUT_MS') ?? 5000;
+    const urls = await this.encoderVpsService.listEnabledBaseUrlsOrdered(2);
+    const primaryUrl = urls[0];
+    const backupUrl = urls[1];
 
     const [dbResult, primaryResult, backupResult] = await Promise.all([
       this.pingDb(),

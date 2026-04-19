@@ -20,8 +20,6 @@ import { EncoderVpsService } from './encoder-vps.service';
 @Injectable()
 export class EncoderService {
   private readonly logger = new Logger(EncoderService.name);
-  private readonly primaryUrl: string;
-  private readonly backupUrl: string;
 
   constructor(
     @InjectRepository(EncoderSession)
@@ -32,10 +30,7 @@ export class EncoderService {
     private readonly livestreamRepo: Repository<Livestream>,
     private readonly encoderVpsService: EncoderVpsService,
     private readonly configService: ConfigService<AppEnv>,
-  ) {
-    this.primaryUrl = this.configService.get('ENCODER_PRIMARY_URL');
-    this.backupUrl = this.configService.get('ENCODER_BACKUP_URL');
-  }
+  ) {}
 
   async startEncoder(
     livestream: Livestream,
@@ -80,10 +75,11 @@ export class EncoderService {
       EncoderNode.BACKUP,
       livestream,
     );
-    await Promise.all([
-      this.sendStopToNode(primaryUrl),
-      this.sendStopToNode(backupUrl),
-    ]);
+    await Promise.all(
+      [primaryUrl, backupUrl]
+        .filter((u): u is string => !!u)
+        .map((u) => this.sendStopToNode(u)),
+    );
 
     const session = await this.getActiveSession(livestreamId);
     if (!session) return;
@@ -177,6 +173,8 @@ export class EncoderService {
       });
     }
     const url = await this.resolveEncoderControlUrl(node, livestream);
+    if (!url) return null;
+
     const timeoutMs = this.configService.get<number>(
       'ENCODER_HEALTH_TIMEOUT_MS',
     );
@@ -237,6 +235,7 @@ export class EncoderService {
       });
     }
     const url = await this.resolveEncoderControlUrl(node, livestream);
+    if (!url) return false;
     return this.probeMediaWithFfmpegAtUrl(url, mediaPath);
   }
 
@@ -295,14 +294,10 @@ export class EncoderService {
     await this.jobRepo.delete({ livestreamId });
   }
 
-  private getNodeUrl(node: EncoderNode): string {
-    return node === EncoderNode.PRIMARY ? this.primaryUrl : this.backupUrl;
-  }
-
   private async resolveEncoderControlUrl(
     node: EncoderNode,
     livestream: Livestream | null | undefined,
-  ): Promise<string> {
+  ): Promise<string | null> {
     if (livestream?.primaryEncoderVpsId && node === EncoderNode.PRIMARY) {
       const u = await this.encoderVpsService.getResolvedBaseUrl(
         livestream.primaryEncoderVpsId,
@@ -315,7 +310,7 @@ export class EncoderService {
       );
       if (u) return u;
     }
-    return this.getNodeUrl(node);
+    return null;
   }
 
   private async sendStopToNode(url: string): Promise<void> {

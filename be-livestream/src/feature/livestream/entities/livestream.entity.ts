@@ -53,11 +53,11 @@ export class Livestream {
   @Column({ type: 'uuid', nullable: true })
   profileId: string | null;
 
-  /** VPS chạy luồng primary (ENGINE_NODE=primary); null = dùng ENCODER_PRIMARY_URL từ env */
+  /** VPS chạy luồng primary (ENGINE_NODE=primary); null = bản ghi cũ trước khi bắt buộc gán VPS */
   @Column({ type: 'uuid', name: 'primary_encoder_vps_id', nullable: true })
   primaryEncoderVpsId: string | null;
 
-  /** VPS chạy luồng backup (ENGINE_NODE=backup); null = dùng ENCODER_BACKUP_URL từ env */
+  /** VPS chạy luồng backup (ENGINE_NODE=backup); null = bản ghi cũ trước khi bắt buộc gán VPS */
   @Column({ type: 'uuid', name: 'backup_encoder_vps_id', nullable: true })
   backupEncoderVpsId: string | null;
 

@@ -27,8 +27,6 @@ export const appConfigs = z
     ROOT_ADMIN_EMAIL: z.string().email(),
     ROOT_ADMIN_PASSWORD: z.string().min(1),
 
-    ENCODER_PRIMARY_URL: z.string().url().default('http://localhost:8080'),
-    ENCODER_BACKUP_URL: z.string().url().default('http://localhost:8081'),
     ENCODER_HEALTH_INTERVAL_MS: z.coerce.number().int().default(3000),
     ENCODER_HEALTH_TIMEOUT_MS: z.coerce.number().int().default(10000),
     ENCODER_FAILOVER_THRESHOLD: z.coerce.number().int().default(3),

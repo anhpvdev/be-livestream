@@ -106,19 +106,17 @@ export class LivestreamService {
     }
 
     this.assertEncoderVpsPair(dto);
-    if (dto.primaryEncoderVpsId && dto.backupEncoderVpsId) {
-      await this.encoderVpsService.assertUsablePair(
-        dto.primaryEncoderVpsId,
-        dto.backupEncoderVpsId,
-      );
-    }
+    await this.encoderVpsService.assertUsablePair(
+      dto.primaryEncoderVpsId,
+      dto.backupEncoderVpsId,
+    );
 
     const livestream = this.livestreamRepo.create({
       googleAccountId: dto.googleAccountId,
       mediaFileId: media.id,
       profileId: dto.profileId,
-      primaryEncoderVpsId: dto.primaryEncoderVpsId ?? null,
-      backupEncoderVpsId: dto.backupEncoderVpsId ?? null,
+      primaryEncoderVpsId: dto.primaryEncoderVpsId,
+      backupEncoderVpsId: dto.backupEncoderVpsId,
       title: profile.livestreamTitle || profile.name,
       description: profile.livestreamDescription || profile.description,
       youtubeBroadcastId: youtubeSession.broadcastId,
@@ -206,37 +204,26 @@ export class LivestreamService {
       };
     }
 
-    const useVpsPool =
-      !!dto.primaryEncoderVpsId && !!dto.backupEncoderVpsId;
-
-    let primaryHealth;
-    let backupHealth;
-    if (useVpsPool) {
-      await this.encoderVpsService.assertUsablePair(
-        dto.primaryEncoderVpsId,
-        dto.backupEncoderVpsId,
-      );
-      const [pu, bu] = await Promise.all([
-        this.encoderVpsService.getResolvedBaseUrl(dto.primaryEncoderVpsId),
-        this.encoderVpsService.getResolvedBaseUrl(dto.backupEncoderVpsId),
-      ]);
-      if (!pu || !bu) {
-        return {
-          ok: false,
-          checks,
-          message: 'Không resolve được base URL cho một trong hai VPS encoder.',
-        };
-      }
-      [primaryHealth, backupHealth] = await Promise.all([
-        this.encoderService.getHealthAtUrl(pu),
-        this.encoderService.getHealthAtUrl(bu),
-      ]);
-    } else {
-      [primaryHealth, backupHealth] = await Promise.all([
-        this.encoderService.getHealth(EncoderNode.PRIMARY),
-        this.encoderService.getHealth(EncoderNode.BACKUP),
-      ]);
+    await this.encoderVpsService.assertUsablePair(
+      dto.primaryEncoderVpsId,
+      dto.backupEncoderVpsId,
+    );
+    const [pu, bu] = await Promise.all([
+      this.encoderVpsService.getResolvedBaseUrl(dto.primaryEncoderVpsId),
+      this.encoderVpsService.getResolvedBaseUrl(dto.backupEncoderVpsId),
+    ]);
+    if (!pu || !bu) {
+      return {
+        ok: false,
+        checks,
+        message: 'Không resolve được base URL cho một trong hai VPS encoder.',
+      };
     }
+
+    const [primaryHealth, backupHealth] = await Promise.all([
+      this.encoderService.getHealthAtUrl(pu),
+      this.encoderService.getHealthAtUrl(bu),
+    ]);
 
     checks.encoderPrimaryReachable = !!primaryHealth;
     checks.encoderBackupReachable = !!backupHealth;
@@ -245,37 +232,15 @@ export class LivestreamService {
       return {
         ok: false,
         checks,
-        message: useVpsPool
-          ? 'Encoder health check failed trên một hoặc hai VPS đã chọn. Kiểm tra baseUrl và port stream-encoder.'
-          : 'Encoder health check failed. Verify ENCODER_PRIMARY_URL/ENCODER_BACKUP_URL and docker ports.',
+        message:
+          'Encoder health check failed trên một hoặc hai VPS đã chọn. Kiểm tra baseUrl và port stream-encoder.',
       };
     }
 
-    const [primaryProbe, backupProbe] = useVpsPool
-      ? await Promise.all([
-          this.encoderService.probeMediaWithFfmpegAtUrl(
-            (await this.encoderVpsService.getResolvedBaseUrl(
-              dto.primaryEncoderVpsId!,
-            ))!,
-            mediaPath,
-          ),
-          this.encoderService.probeMediaWithFfmpegAtUrl(
-            (await this.encoderVpsService.getResolvedBaseUrl(
-              dto.backupEncoderVpsId!,
-            ))!,
-            mediaPath,
-          ),
-        ])
-      : await Promise.all([
-          this.encoderService.probeMediaWithFfmpeg(
-            EncoderNode.PRIMARY,
-            mediaPath,
-          ),
-          this.encoderService.probeMediaWithFfmpeg(
-            EncoderNode.BACKUP,
-            mediaPath,
-          ),
-        ]);
+    const [primaryProbe, backupProbe] = await Promise.all([
+      this.encoderService.probeMediaWithFfmpegAtUrl(pu, mediaPath),
+      this.encoderService.probeMediaWithFfmpegAtUrl(bu, mediaPath),
+    ]);
     checks.encoderPrimaryFfmpegProbe = primaryProbe;
     checks.encoderBackupFfmpegProbe = backupProbe;
 
@@ -658,14 +623,7 @@ export class LivestreamService {
   }
 
   private assertEncoderVpsPair(dto: StartLivestreamDto): void {
-    const a = dto.primaryEncoderVpsId;
-    const b = dto.backupEncoderVpsId;
-    if ((a && !b) || (!a && b)) {
-      throw new BadRequestException(
-        'Cần truyền đủ primaryEncoderVpsId và backupEncoderVpsId, hoặc bỏ cả hai để dùng URL encoder từ biến môi trường.',
-      );
-    }
-    if (a && b && a === b) {
+    if (dto.primaryEncoderVpsId === dto.backupEncoderVpsId) {
       throw new BadRequestException(
         'primaryEncoderVpsId và backupEncoderVpsId phải là hai VPS khác nhau.',
       );

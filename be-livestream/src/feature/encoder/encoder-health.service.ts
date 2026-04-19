@@ -98,18 +98,27 @@ export class EncoderHealthService implements OnModuleDestroy {
   ): Promise<void> {
     const currentNode = monitor.currentNode;
     const fallbackNode = this.getBackupNode(currentNode);
+    const inGracePeriod = Date.now() < monitor.graceUntilMs;
     const health = await this.encoderService.getHealth(
       monitor.currentNode,
       livestreamId,
     );
-    const inGracePeriod = Date.now() < monitor.graceUntilMs;
 
     if (!health || health.status !== 'running') {
+      // Vừa start: primary có thể còn idle vài giây (poll DB + spawn ffmpeg).
+      if (inGracePeriod) {
+        return;
+      }
+
       const fallbackHealth = await this.encoderService.getHealth(
         fallbackNode,
         livestreamId,
       );
-      if (fallbackHealth?.status === 'running') {
+      const fallbackServesThisLivestream =
+        fallbackHealth?.status === 'running' &&
+        fallbackHealth.livestreamId === livestreamId;
+
+      if (fallbackServesThisLivestream) {
         if (monitor.currentNode !== fallbackNode) {
           this.logger.warn(
             `Monitor node switched to [${fallbackNode}] because [${currentNode}] is not running`,
@@ -119,10 +128,6 @@ export class EncoderHealthService implements OnModuleDestroy {
         monitor.missCount = 0;
         monitor.graceUntilMs = Date.now() + this.startupGraceMs;
         await this.updateProgress(livestreamId, fallbackHealth);
-        return;
-      }
-
-      if (inGracePeriod) {
         return;
       }
       monitor.missCount++;

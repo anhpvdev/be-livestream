@@ -137,6 +137,17 @@ export class EncoderVpsService {
     return this.normalizeBaseUrl(row.baseUrl);
   }
 
+  /** Tối đa `limit` baseUrl VPS đang bật (ổn định theo createdAt), dùng cho GET /health. */
+  async listEnabledBaseUrlsOrdered(limit: number): Promise<string[]> {
+    const rows = await this.vpsRepo.find({
+      where: { enabled: true },
+      order: { createdAt: 'ASC' },
+      take: limit,
+      select: ['baseUrl'],
+    });
+    return rows.map((r) => this.normalizeBaseUrl(r.baseUrl));
+  }
+
   async assertUsablePair(primaryId: string, backupId: string): Promise<void> {
     if (primaryId === backupId) {
       throw new BadRequestException(
